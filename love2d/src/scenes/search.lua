@@ -117,7 +117,7 @@ function Search:draw()
     local id = self.results[i]
     local rec = app.sessions.get(id)
     local name = rec and rec.name or app.core.getName(id)
-    local host = rec and (rec.user .. "@" .. rec.host) or ""
+    local host = rec and app.cfg.who(rec.user, rec.host) or ""
     local selected = i == self.sel
     if selected then
       G.panel(x + 10, ry, W - 20, 18, "ink", "neon_pink")

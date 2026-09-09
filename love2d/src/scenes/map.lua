@@ -1041,10 +1041,7 @@ function Map:stageName(host)
     return "+ Connect server"
   end
   local _, rec = self:stageState(host)
-  if rec then
-    return rec.name
-  end
-  return host.label or host.host
+  return require("src.config").nodeName(host, rec)
 end
 
 function Map:drawLabel(slot, pop)

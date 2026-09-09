@@ -23,6 +23,9 @@ local function defaults()
     crt = true,
     bezel = true,
     barrel = false,
+    retro = true, -- cool-retro-term stages: bloom, burn-in, noise, flicker, jitter
+    phosphor = "amber", -- off | amber | green | white (tube colouring)
+    maskIds = false, -- privacy for screen capture: ids/addresses drawn as ****
     fontScale = 1,
     termZoom = 1,
     keyClicks = false,
@@ -65,6 +68,9 @@ function C.load()
   local d = C.data
   if d.lobbyView ~= "map" then
     d.lobbyView = "map2"
+  end
+  if d.phosphor ~= "off" and d.phosphor ~= "green" and d.phosphor ~= "white" then
+    d.phosphor = "amber"
   end
   if not C.DEFAULT_MODELS[d.defaultProvider] then
     d.defaultProvider = "openai"
@@ -111,6 +117,57 @@ function C.get()
 end
 
 -- Key from settings, else env var(s).
+-- Privacy for screen capture (PRIVACY button / Settings): every user name,
+-- host, address and port is drawn as stars; session and node names stay.
+function C.private()
+  return C.data.maskIds == true
+end
+
+function C.stars(s)
+  s = tostring(s or "")
+  if s == "" then
+    return s
+  end
+  return string.rep("*", math.min(#s, 6))
+end
+
+-- "user@host[:port]" or its masked form.
+function C.who(user, host, port)
+  if C.private() then
+    return "****@****" .. ((port and port ~= 22) and ":**" or "")
+  end
+  local s = (user or "") .. "@" .. (host or "")
+  if port and port ~= 22 then
+    s = s .. ":" .. tostring(port)
+  end
+  return s
+end
+
+-- A node's display name: the label if it has one, else the host, which is
+-- masked in private mode so an address never doubles as the name.
+function C.nodeName(host, rec)
+  if rec and rec.name then
+    return rec.name
+  end
+  if host.label and host.label ~= "" then
+    return host.label
+  end
+  return C.private() and "****" or (host.host or "")
+end
+
+-- Paths shown in the chrome: the user's own name inside them is masked.
+function C.hidePath(path, user, host)
+  if not C.private() or not path then
+    return path
+  end
+  for _, needle in ipairs({ user, host }) do
+    if needle and needle ~= "" then
+      path = path:gsub(needle:gsub("%W", "%%%0"), "****")
+    end
+  end
+  return path
+end
+
 function C.apiKey(provider)
   local k = C.data.apiKeys and C.data.apiKeys[provider]
   if k and k ~= "" then

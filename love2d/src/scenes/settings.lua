@@ -64,6 +64,9 @@ function Settings.new(app)
     { id = "bezel", label = "CRT bezel", kind = "bool" },
     { id = "crt", label = "CRT scanlines", kind = "bool" },
     { id = "barrel", label = "CRT barrel", kind = "bool" },
+    { id = "retro", label = "CRT phosphor fx", kind = "bool" },
+    { id = "phosphor", label = "CRT tube colour", kind = "phosphor" },
+    { id = "maskIds", label = "privacy: mask ids", kind = "bool" },
     { id = "fontScale", label = "UI scale", kind = "scale" },
     { id = "termZoom", label = "terminal zoom", kind = "zoom" },
     { id = "keyClicks", label = "key clicks", kind = "bool" },
@@ -110,6 +113,8 @@ function Settings:valueText(row)
     return v == 0 and "off" or tostring(v)
   elseif row.kind == "bool" then
     return cfg[row.id] and "ON" or "off"
+  elseif row.kind == "phosphor" then
+    return cfg.phosphor or "off"
   elseif row.kind == "scale" then
     return string.format("x%.1f", cfg.fontScale or 1)
   elseif row.kind == "zoom" then
@@ -171,6 +176,15 @@ function Settings:adjust(row, dir)
     app.resize(love.graphics.getDimensions())
   elseif row.kind == "display" then
     app.toggleFullscreen()
+  elseif row.kind == "phosphor" then
+    local list = app.fx.PHOSPHORS
+    local i = 1
+    for k, o in ipairs(list) do
+      if o == (cfg.phosphor or "off") then
+        i = k
+      end
+    end
+    cfg.phosphor = list[((i - 1 + dir) % #list) + 1]
   elseif row.kind == "orientation" then
     local list = app.D.ORIENTATIONS
     local i = 1
@@ -352,6 +366,7 @@ function Settings:draw()
         or row.kind == "zoom"
         or row.kind == "display"
         or row.kind == "orientation"
+        or row.kind == "phosphor"
       )
     then
       G.ui("<", x + 152, ry + 2, "yellow")

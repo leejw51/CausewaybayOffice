@@ -320,10 +320,7 @@ function Lobby:drawCard(i, rec)
 
   -- host row with link icon
   G.drawIcon("icon_link", 12, 23, 8, alpha)
-  local line = rec.user .. "@" .. rec.host
-  if rec.port and rec.port ~= 22 then
-    line = line .. ":" .. rec.port
-  end
+  local line = require("src.config").who(rec.user, rec.host, rec.port)
   while G.uiWidth(line) > CARD_W - 36 and #line > 1 do
     line = line:sub(1, -2)
   end

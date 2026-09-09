@@ -289,6 +289,43 @@ function M.run(App)
   check("term_view rowText skips continuation", tv:rowText(0, 0, 5) == "a你bř")
   tv.sel = { x0 = 0, y0 = 0, x1 = 3, y1 = 0 }
   check("selection text", tv:selectedText() == "a你b")
+  -- cursor glide: expo in/out between cells, trail + embers that die out
+  do
+    local cv = TermView.new(nil, nil)
+    cv.cols, cv.rows, cv.cvis = 40, 10, true
+    cv.cx, cv.cy = 0, 0
+    cv:update(0.016) -- first sight: snaps
+    check("cursor snaps on first frame", cv.cur.x == 0 and not cv.cur.moving)
+    cv.cx, cv.cy = 20, 3
+    cv:update(0.016)
+    local mid = cv.cur
+    check("cursor glides (not there yet)", mid.moving and mid.x > 0 and mid.x < 20, mid.x)
+    check("cursor fades while moving", mid.alpha < 1, mid.alpha)
+    check("cursor leaves a trail", cv:trailCount() > 0)
+    check("cursor throws embers", cv:emberCount() > 0)
+    local prev = mid.x
+    cv:update(0.016)
+    check("cursor keeps moving forward", cv.cur.x > prev)
+    for _ = 1, 90 do
+      cv:update(0.016)
+    end
+    check("cursor arrives exactly", cv.cur.x == 20 and cv.cur.y == 3 and not cv.cur.moving)
+    check("cursor alpha restored", cv.cur.alpha == 1)
+    check("trail dies out", cv:trailCount() == 0, cv:trailCount())
+    check("embers die out", cv:emberCount() == 0, cv:emberCount())
+    -- duration grows with distance but stays bounded
+    cv.cx = 21
+    cv:update(0.001)
+    local short = cv.cur.dur
+    cv.cx = 0
+    cv.cy = 9
+    cv:update(0.001)
+    check("far jump takes longer, bounded", cv.cur.dur > short and cv.cur.dur <= 0.32, cv.cur.dur)
+    check(
+      "expoInOut symmetric",
+      math.abs(fx.ease.expoInOut(0.25) + fx.ease.expoInOut(0.75) - 1) < 1e-6
+    )
+  end
   -- font metrics: Unifont wide glyph is exactly 2 cells
   check("unifont ascii advance 8", G.fontTerm:getWidth("a") == 8, G.fontTerm:getWidth("a"))
   check("unifont CJK advance 16", G.fontTerm:getWidth("你") == 16, G.fontTerm:getWidth("你"))
@@ -1576,7 +1613,76 @@ function M.run(App)
         term.statusRight:find("F2 lobby", 1, true) ~= nil and term.statusRightX > term.statusLeftEnd,
         term.statusRight .. " @" .. term.statusRightX .. " left " .. term.statusLeftEnd
       )
+      local ids = {}
+      for _, bt in ipairs(term.buttons) do
+        ids[bt.id or ""] = bt
+      end
+      if w[1] >= 800 then
+        check(
+          string.format(
+            "status bar at %dx%d has GLOW, zoom and PRIVACY buttons left of the hint",
+            w[1],
+            w[2]
+          ),
+          ids.retro
+            and ids.font
+            and ids.privacy
+            and ids.privacy.x + ids.privacy.w <= term.statusRightX,
+          tostring(ids.retro)
+            .. " "
+            .. tostring(ids.font)
+            .. " vw="
+            .. D.vw
+            .. " rightX="
+            .. term.statusRightX
+            .. " left="
+            .. term.statusLeftEnd
+            .. " n="
+            .. #term.buttons
+        )
+      end
     end
+    -- RETRO toggles the config flag; FONT cycles the zoom 1 -> 2 -> 1
+    local cfgT = App.cfg.get()
+    local was = cfgT.retro
+    term:toggleRetro()
+    check("GLOW button flips cfg.retro", cfgT.retro == (was == false))
+    term:toggleRetro()
+    check("GLOW button flips it back", cfgT.retro == was)
+    D.resize(1080, 800)
+    term:layout()
+    term:cycleZoom()
+    check("zoom button zooms to 2x", D.termZoom == 2, D.termZoom)
+    term:cycleZoom()
+    check("zoom button cycles back to 1x", D.termZoom == 1, D.termZoom)
+    -- PRIVACY: ids, hosts and ports are stars; names survive
+    cfgT.maskIds = false
+    check("who() plain", Config.who("alice", "10.0.0.7", 2222) == "alice@10.0.0.7:2222")
+    term:togglePrivacy()
+    check("PRIVACY button turns masking on", cfgT.maskIds == true)
+    check("who() masked", Config.who("alice", "10.0.0.7", 2222) == "****@****:**")
+    check("who() masked default port", Config.who("alice", "box") == "****@****")
+    check(
+      "nodeName keeps a label",
+      Config.nodeName({ label = "office", host = "10.0.0.7" }) == "office"
+    )
+    check("nodeName masks a bare host", Config.nodeName({ host = "10.0.0.7" }) == "****")
+    check(
+      "nodeName prefers the session name",
+      Config.nodeName({ host = "h" }, { name = "mary-1" }) == "mary-1"
+    )
+    check(
+      "hidePath masks the user in a path",
+      Config.hidePath("/Users/alice/src", "alice", "box.example") == "/Users/****/src"
+    )
+    term:drawStatus(rec)
+    check("title row masks user@host", term.statusRight ~= nil)
+    term:togglePrivacy()
+    check("PRIVACY button turns masking off", cfgT.maskIds == false)
+    check(
+      "hidePath passthrough when off",
+      Config.hidePath("/Users/alice", "alice") == "/Users/alice"
+    )
     D.resize(savedW, savedH)
     lib.reset()
   end

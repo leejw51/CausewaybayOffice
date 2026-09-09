@@ -343,7 +343,7 @@ function Term.titleRows(D, rec, G)
   local room = D.vw - x - 68
   local need = G.uiWidth(rec.name or "")
     + 10
-    + G.uiWidth((rec.user or "") .. "@" .. (rec.host or ""))
+    + G.uiWidth(require("src.config").who(rec.user, rec.host))
     + 10
     + G.uiWidth("[00/00]")
   return rows + (need > room and 1 or 0)
@@ -413,6 +413,28 @@ function Term:resize()
   end
   self:layout()
   self.aiW.w = self.aiTargetW
+end
+
+-- GLOW button: the cool-retro-term stages and the cursor trail together.
+function Term:toggleRetro()
+  local cfg = self.app.cfg.get()
+  cfg.retro = cfg.retro == false
+  self.app.cfg.save()
+  self.app.fx.flash(0.15, 1, 1, 1, 0.15)
+end
+
+-- PRIVACY button: ids, hosts, addresses and ports draw as stars (screen capture).
+function Term:togglePrivacy()
+  local cfg = self.app.cfg.get()
+  cfg.maskIds = not cfg.maskIds
+  self.app.cfg.save()
+  self.app.fx.flash(0.15, 1, 1, 1, 0.15)
+end
+
+-- Zoom button: 1x -> 2x -> 1x.
+function Term:cycleZoom()
+  local D = self.app.D
+  self:setZoom(D.termZoom >= 2 and 1 or D.termZoom + 1)
 end
 
 function Term:setZoom(z)
@@ -966,6 +988,8 @@ function Term:drawFolderBar(y)
   local G, vw = app.G, app.D.vw
   local path = app.core.cwd(self.id)
   self.displayedFolder = path
+  local rec = app.sessions.get(self.id)
+  path = app.cfg.hidePath(path, rec and rec.user, rec and rec.host)
   G.panel(0, y, vw, CWD_H, "ink", "dblue")
   G.ui("FOLDER", 8, y + 4, "gray")
   local px = 16 + G.uiWidth("FOLDER")
@@ -1081,7 +1105,7 @@ function Term:drawTabStrip(rec)
     x = x + G.uiWidth(t) + (gap or 10)
     return t == txt
   end
-  local hostTxt = rec.user .. "@" .. rec.host
+  local hostTxt = app.cfg.who(rec.user, rec.host)
   local idx = string.format("[%d/%d]", app.sessions.index(self.id) or 0, app.sessions.count())
   if rows > toolbarRows then
     -- title row: the whole name, then host and index as room allows
@@ -1158,17 +1182,55 @@ function Term:drawStatus(rec)
     + G.uiWidth(stTxt)
     + 12
     + (idleTxt and G.uiWidth(idleTxt) + 12 or 0)
+  -- GLOW / zoom / PRIVACY buttons sit left of the right-hand hint; the hint
+  -- shrinks to "F1 help" and the idle counter yields before they are dropped
+  local cfgNow = app.cfg.get()
+  local toggles = {
+    { id = "retro", label = "GLOW", on = cfgNow.retro ~= false, fn = self.toggleRetro },
+    { id = "font", label = (self.zoom or 1) .. "x", on = true, fn = self.cycleZoom },
+    { id = "privacy", label = "PRIVACY", on = cfgNow.maskIds == true, fn = self.togglePrivacy },
+  }
+  local btnW = 12
+  for _, b in ipairs(toggles) do
+    b.w = G.uiWidth(b.label) + 12
+    btnW = btnW + b.w + 4
+  end
+  local core = desired - (idleTxt and G.uiWidth(idleTxt) + 12 or 0)
   local right = grid .. BACK_HINT
-  if vw - G.uiWidth(right) - 8 <= desired then
+  if vw - G.uiWidth(right) - 8 - btnW <= desired then
     right = BACK_HINT
+  end
+  if vw - G.uiWidth(right) - 8 - btnW <= core then
+    right = "F1 help"
   end
   local rightX = vw - G.uiWidth(right) - 8
   local stateW = G.uiWidth(stTxt)
-  local kaRoom = rightX - x - stateW - 36
+  local leftEdge = rightX
+  if rightX - btnW > core then
+    leftEdge = rightX - btnW
+    local bx = leftEdge + 4
+    for _, b in ipairs(toggles) do
+      G.panel(bx, y + 1, b.w, STATUS_H - 2, b.on and "dblue" or "ink", b.on and "cyan" or "dgray")
+      G.ui(b.label, bx + 6, y + 4, b.on and "yellow" or "gray")
+      local fn = b.fn
+      self.buttons[#self.buttons + 1] = {
+        id = b.id,
+        x = bx,
+        y = y,
+        w = b.w,
+        h = STATUS_H,
+        fn = function()
+          fn(self)
+        end,
+      }
+      bx = bx + b.w + 4
+    end
+  end
+  local kaRoom = leftEdge - x - stateW - 36
   local shown = UI.fit(kaTxt, kaRoom)
   G.ui(shown, x, y + 5, rec.pulse > 0 and "lgreen" or "gray")
   x = x + G.uiWidth(shown) + 12
-  if idleTxt and x + G.uiWidth(idleTxt) + stateW + 36 < rightX then
+  if idleTxt and x + G.uiWidth(idleTxt) + stateW + 36 < leftEdge then
     G.ui(idleTxt, x, y + 5, "gray")
     x = x + G.uiWidth(idleTxt) + 12
   end
@@ -1176,7 +1238,7 @@ function Term:drawStatus(rec)
   x = x + stateW + 12
   self.statusRight, self.statusRightX, self.statusLeftEnd = right, rightX, x
   if rec.state == ST.ERROR then
-    UI.label(app.core.error(self.id), x, y + 5, rightX - x - 12, "alarm")
+    UI.label(app.core.error(self.id), x, y + 5, leftEdge - x - 12, "alarm")
   end
   G.ui(right, rightX, y + 5, "gray")
   self.completionBox, self.transferBox = nil, nil
@@ -1273,7 +1335,10 @@ function Term:draw()
   local crtOpts, prevOpts = self.crtOpts, self.prevOpts
   crtOpts.crt = cfg.crt ~= false
   crtOpts.barrel = cfg.barrel and 0.04 or 0
-  prevOpts.crt, prevOpts.barrel = crtOpts.crt, crtOpts.barrel
+  crtOpts.retro = cfg.retro ~= false
+  crtOpts.phosphor = cfg.phosphor
+  prevOpts.crt, prevOpts.barrel, prevOpts.retro = crtOpts.crt, crtOpts.barrel, crtOpts.retro
+  prevOpts.phosphor = crtOpts.phosphor
   if self.prev and self.prev.view then
     self:pushGridSpace(self.prev.x)
     self.prev.view:draw(0, 0, zoom, prevOpts)
@@ -1307,7 +1372,7 @@ function Term:draw()
     local col = "amber"
     if rec.state == ST.CONNECTING then
       local dots = string.rep(".", math.floor(self.t * 3) % 4)
-      msg = "CONNECTING " .. rec.user .. "@" .. rec.host .. dots
+      msg = "CONNECTING " .. app.cfg.who(rec.user, rec.host) .. dots
     elseif rec.state == ST.ERROR then
       msg = "ERROR: " .. app.core.error(self.id)
       col = "alarm"

@@ -475,15 +475,98 @@ end
 
 fx.crt = nil
 
+-- CRT post pipeline, after cool-retro-term (github.com/Swordfish90/cool-retro-term):
+--   1. burn-in   : ping-pong canvas at native res, max(prev - decay, text), so
+--                  glyphs linger and fade like phosphor
+--   2. bloom     : quarter-res copy blurred in two separable passes
+--   3. screen    : curvature, jitter, horizontal sync tear, RGB shift, static
+--                  noise, a sweeping glow line, flicker, scanlines, vignette,
+--                  then bloom added on top
+-- Every stage but the last is skipped when opts.retro is off, which leaves the
+-- original scanline + barrel look untouched. fx.retro holds the intensities;
+-- the profile is roughly cool-retro-term's "Default Amber" with colour kept.
+fx.retro = {
+  bloom = 1.0, -- halo strength; glyphs are also pushed over-bright by it
+  bg = { 16 / 255, 24 / 255, 48 / 255 }, -- terminal ground, subtracted before blurring
+  burnIn = 0.45, -- 0 = instant decay, 1 = long persistence
+  noise = 0.07,
+  flicker = 0.08,
+  jitter = 0.18,
+  hsync = 0.06,
+  rgbShift = 0.5,
+  glowLine = 0.04,
+  chroma = 0.55, -- phosphor modes: 0 = pure monochrome, 1 = keep every hue
+}
+-- cool-retro-term's classic tubes (fontColor of its Default Amber / Green /
+-- White profiles). opts.phosphor picks one; "off" keeps the true colours.
+fx.PHOSPHORS = { "off", "amber", "green", "white" }
+fx.phosphorColor = {
+  amber = { 1.0, 0.506, 0.0 },
+  green = { 0.05, 0.8, 0.41 },
+  white = { 0.94, 0.94, 0.94 },
+}
+
+local crtStates = setmetatable({}, { __mode = "k" }) -- canvas -> burn/bloom canvases
+
+local function makeNoise()
+  local n = 256
+  local data = love.image.newImageData(n, n)
+  local rnd = love.math.random
+  data:mapPixel(function()
+    return rnd(), rnd(), rnd(), rnd()
+  end)
+  local img = love.graphics.newImage(data)
+  img:setWrap("repeat", "repeat")
+  img:setFilter("linear", "linear")
+  return img
+end
+
+local function newShader(src, what)
+  local ok, sh = pcall(love.graphics.newShader, src)
+  if ok then
+    return sh
+  end
+  print("[fx] " .. what .. " shader failed: " .. tostring(sh))
+  return nil
+end
+
 function fx.initCRT()
-  local ok, sh = pcall(
-    love.graphics.newShader,
+  fx.noiseImg = makeNoise()
+  fx.crt = newShader(
     [[
     extern float scale;      // integer pixel scale
     extern float scanline;   // 0..1 darkness of odd lines
     extern float vignette;   // 0..1
     extern float barrel;     // 0 = off
     extern vec2 size;        // draw size in screen px
+    extern float retro;      // 1 = cool-retro-term stages on
+    extern float time;
+    extern Image noiseTex;   // 256x256 random rgba, repeat
+    extern Image burnTex;    // phosphor persistence buffer (native res)
+    extern Image bloomTex;   // blurred quarter-res copy
+    extern float bloom;
+    extern float noise;
+    extern float glowLine;
+    extern float jitter;
+    extern float rgbShift;
+    extern float brightness;     // per-frame flicker
+    extern float syncScale;      // per-frame horizontal sync tear
+    extern float syncFreq;
+    extern float mono;           // 1 = phosphor tube colouring on
+    extern vec3 phosphor;        // tube colour
+    extern float chroma;         // how much of the original hue survives
+
+    // cool-retro-term convertWithChroma: luminance drives the tube colour,
+    // chroma blends the original hue back in
+    vec3 tube(vec3 c) {
+      if (mono < 0.5) {
+        return c;
+      }
+      float grey = dot(c, vec3(0.21, 0.72, 0.04));
+      vec3 fg = mix(phosphor, c * phosphor / max(grey, 0.0001), chroma);
+      return fg * grey;
+    }
+
     vec4 effect(vec4 color, Image tex, vec2 uv, vec2 sc) {
       vec2 p = uv;
       if (barrel > 0.0) {
@@ -494,38 +577,223 @@ function fx.initCRT()
           return vec4(0.0, 0.0, 0.0, color.a);
         }
       }
-      vec4 col = Texel(tex, p);
-      float line = mod(floor(p.y * size.y / scale), 2.0);
-      col.rgb *= 1.0 - scanline * line;
-      vec2 d = p - 0.5;
-      float v = 1.0 - vignette * dot(d, d) * 1.6;
-      col.rgb *= v;
-      return col * color;
+      vec2 sp = p; // static (undistorted-by-time) coords for scanline/burn/bloom
+      vec3 col;
+      if (retro > 0.5) {
+        // horizontal sync: a sine tear that rolls with time
+        p.x += sin((p.y + time) * syncFreq) * syncScale;
+        vec4 nz = Texel(noiseTex, p * 6.0 + vec2(fract(time / 0.051), fract(time / 0.237)));
+        // jitter: whole-picture wobble driven by the noise texture
+        vec2 tp = p + (nz.ba - 0.5) * vec2(0.007, 0.002) * jitter;
+        // rgb shift: chromatic fringing left/right
+        vec2 d = vec2(rgbShift * 1.5 / size.x * scale, 0.0);
+        // phosphor smear: strokes bleed half a native pixel sideways, so the
+        // magnified bitmap font reads as soft light instead of hard stairs
+        vec2 sm = vec2(0.5 / size.x * scale, 0.0);
+        vec3 c0 = (Texel(tex, tp).rgb * 2.0 + Texel(tex, tp + sm).rgb + Texel(tex, tp - sm).rgb) * 0.25;
+        vec3 cr = (Texel(tex, tp + d).rgb * 2.0 + Texel(tex, tp + d + sm).rgb + Texel(tex, tp + d - sm).rgb) * 0.25;
+        vec3 cl = (Texel(tex, tp - d).rgb * 2.0 + Texel(tex, tp - d + sm).rgb + Texel(tex, tp - d - sm).rgb) * 0.25;
+        col.r = cl.r * 0.10 + cr.r * 0.30 + c0.r * 0.60;
+        col.g = cl.g * 0.20 + cr.g * 0.20 + c0.g * 0.60;
+        col.b = cl.b * 0.30 + cr.b * 0.10 + c0.b * 0.60;
+        // phosphor persistence: old glyphs linger below the fresh ones
+        vec3 burn = Texel(burnTex, sp).rgb;
+        col = max(col, burn * 0.65);
+        // static noise (weaker toward the edges) + a glowing line sweeping down
+        float dist = length(vec2(0.5) - uv);
+        float g = nz.a * noise * (1.0 - dist * 1.3);
+        float py = sp.y * size.y / scale;
+        float rows = size.y / scale;
+        // (a soft leading edge instead of cool-retro-term's hard cut)
+        float tail = rows * 0.35;
+        float lead = py - (rows + tail) * fract(time * 0.12);
+        g += smoothstep(-tail, 0.0, lead) * (1.0 - smoothstep(0.0, tail * 0.25, lead)) * glowLine;
+        col += vec3(g);
+        col = tube(col);
+      } else {
+        col = Texel(tex, p).rgb;
+      }
+      if (retro > 0.5 && scale >= 2.0) {
+        // cool-retro-term raster: each native row is a bright phosphor line
+        // with dark gaps, visible once a row spans 2+ screen pixels
+        float fy = fract(sp.y * size.y / scale) * 2.0 - 1.0;
+        float mask = 1.0 - abs(fy);
+        vec3 hi = ((1.0 + 0.3) - (0.2 * col)) * col;
+        vec3 lo = ((1.0 - 0.3) + (0.1 * col)) * col;
+        col = mix(col, mix(lo, hi, mask), scanline * 6.0);
+      } else {
+        // 1:1 scanlines: every other native pixel row darkened
+        float line = mod(floor(sp.y * size.y / scale), 2.0);
+        col *= 1.0 - scanline * line;
+      }
+      if (retro > 0.5) {
+        // phosphor glow: the glyph itself runs hot, and its blurred light
+        // spills into the surrounding cells
+        col *= 1.0 + 0.35 * bloom;
+        col += clamp(tube(Texel(bloomTex, sp).rgb) * bloom, 0.0, 0.85);
+        col *= brightness;
+      }
+      vec2 dd = sp - 0.5;
+      float v = 1.0 - vignette * dot(dd, dd) * 1.6;
+      col *= v;
+      return vec4(col, 1.0) * color;
     }
-  ]]
+  ]],
+    "CRT"
   )
-  if ok then
-    fx.crt = sh
-  else
-    print("[fx] CRT shader failed: " .. tostring(sh))
+  fx.burnSh = newShader(
+    [[
+    extern Image prevTex;
+    extern float decay;
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 sc) {
+      vec3 cur = Texel(tex, uv).rgb;
+      vec3 prev = Texel(prevTex, uv).rgb - vec3(decay);
+      return vec4(max(prev, cur), 1.0);
+    }
+  ]],
+    "burn-in"
+  )
+  fx.lightSh = newShader(
+    [[
+    extern vec3 bg;
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 sc) {
+      vec3 c = max(Texel(tex, uv).rgb - bg, vec3(0.0));
+      return vec4(c * 2.5, 1.0);
+    }
+  ]],
+    "bloom-light"
+  )
+  fx.blurSh = newShader(
+    [[
+    extern vec2 dir; // (1/w, 0) or (0, 1/h)
+    vec4 effect(vec4 color, Image tex, vec2 uv, vec2 sc) {
+      vec3 c = Texel(tex, uv).rgb * 0.227;
+      c += (Texel(tex, uv + dir * 1.385).rgb + Texel(tex, uv - dir * 1.385).rgb) * 0.316;
+      c += (Texel(tex, uv + dir * 3.231).rgb + Texel(tex, uv - dir * 3.231).rgb) * 0.070;
+      return vec4(c, 1.0) * color;
+    }
+  ]],
+    "blur"
+  )
+end
+
+local function crtState(canvas)
+  local st = crtStates[canvas]
+  if st then
+    return st
   end
+  local w, h = canvas:getWidth(), canvas:getHeight()
+  local function cv(cw, ch, filter)
+    local c = love.graphics.newCanvas(cw, ch)
+    c:setFilter(filter, filter)
+    c:renderTo(function()
+      love.graphics.clear(0, 0, 0, 1)
+    end)
+    return c
+  end
+  local bw, bh = math.max(1, math.floor(w / 2)), math.max(1, math.floor(h / 2))
+  st = {
+    burnA = cv(w, h, "linear"), -- linear so the half-res bloom keeps 1 px strokes
+    burnB = cv(w, h, "linear"),
+    bloomA = cv(bw, bh, "linear"),
+    bloomB = cv(bw, bh, "linear"),
+    blurDir = { 0, 0 },
+    lastTime = fx.time,
+  }
+  crtStates[canvas] = st
+  return st
+end
+
+-- Burn-in and bloom passes for `canvas`; returns the two textures the screen
+-- shader samples. Restores whatever canvas/shader/blend state was active.
+local function retroPasses(canvas, st, r)
+  local dt = math.min(0.1, math.max(0, fx.time - st.lastTime))
+  st.lastTime = fx.time
+  love.graphics.push("all")
+  love.graphics.origin()
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.setBlendMode("replace", "premultiplied")
+  -- burn-in: new = max(prev - decay, text); decay rate 6/s .. 0.8/s
+  local rate = 6 - 5.2 * math.min(1, math.max(0, r.burnIn))
+  fx.burnSh:send("prevTex", st.burnA)
+  fx.burnSh:send("decay", rate * dt)
+  love.graphics.setCanvas(st.burnB)
+  love.graphics.setShader(fx.burnSh)
+  love.graphics.draw(canvas, 0, 0)
+  st.burnA, st.burnB = st.burnB, st.burnA
+  -- bloom: keep only the light above the ground colour, at half res, then
+  -- three separable blur iterations (about a 14 px halo at native res)
+  local bw, bh = st.bloomA:getWidth(), st.bloomA:getHeight()
+  fx.lightSh:send("bg", r.bg)
+  love.graphics.setShader(fx.lightSh)
+  love.graphics.setCanvas(st.bloomA)
+  love.graphics.draw(st.burnA, 0, 0, 0, bw / canvas:getWidth(), bh / canvas:getHeight())
+  love.graphics.setShader(fx.blurSh)
+  for _ = 1, 3 do
+    st.blurDir[1], st.blurDir[2] = 1 / bw, 0
+    fx.blurSh:send("dir", st.blurDir)
+    love.graphics.setCanvas(st.bloomB)
+    love.graphics.draw(st.bloomA, 0, 0)
+    st.blurDir[1], st.blurDir[2] = 0, 1 / bh
+    fx.blurSh:send("dir", st.blurDir)
+    love.graphics.setCanvas(st.bloomA)
+    love.graphics.draw(st.bloomB, 0, 0)
+  end
+  love.graphics.pop()
+  return st.burnA, st.bloomA
 end
 
 -- Blit a canvas through the CRT shader at integer scale. opts.crt == false
--- (or opts.enabled == false) skips the shader. Allocation-free per call.
+-- (or opts.enabled == false) skips the shader; opts.retro == true adds the
+-- cool-retro-term stages. Allocation-free per call.
 local crtSize = { 0, 0 }
 local NO_OPTS = {}
 function fx.drawCRT(canvas, x, y, scale, opts)
   opts = opts or NO_OPTS
   local enabled = opts.enabled ~= false and opts.crt ~= false and fx.crt
   if enabled then
-    fx.crt:send("scale", scale)
-    fx.crt:send("scanline", opts.scanline or 0.12)
-    fx.crt:send("vignette", opts.vignette or 0.25)
-    fx.crt:send("barrel", opts.barrel or 0)
+    local sh = fx.crt
+    local retro = opts.retro == true and fx.burnSh and fx.blurSh and fx.lightSh
+    sh:send("scale", scale)
+    sh:send("scanline", opts.scanline or 0.12)
+    sh:send("vignette", opts.vignette or 0.25)
+    sh:send("barrel", opts.barrel or 0)
     crtSize[1], crtSize[2] = canvas:getWidth() * scale, canvas:getHeight() * scale
-    fx.crt:send("size", crtSize)
-    love.graphics.setShader(fx.crt)
+    sh:send("size", crtSize)
+    sh:send("retro", retro and 1 or 0)
+    -- the retro path magnifies with linear filtering (soft phosphor); the
+    -- plain path keeps the crisp nearest-neighbour pixels
+    local want = retro and "linear" or "nearest"
+    if canvas:getFilter() ~= want then
+      canvas:setFilter(want, want)
+    end
+    if retro then
+      local r = fx.retro
+      local burn, bloom = retroPasses(canvas, crtState(canvas), r)
+      local t = fx.time
+      sh:send("time", t)
+      sh:send("noiseTex", fx.noiseImg)
+      sh:send("burnTex", burn)
+      sh:send("bloomTex", bloom)
+      sh:send("bloom", r.bloom)
+      sh:send("noise", r.noise)
+      sh:send("glowLine", r.glowLine)
+      sh:send("jitter", r.jitter)
+      sh:send("rgbShift", r.rgbShift)
+      -- per-frame scalars, as cool-retro-term computes them in its vertex stage
+      local n1 = love.math.noise(t * 7.3, 0.37)
+      local n2 = love.math.noise(t * 0.9, 5.11)
+      sh:send("brightness", 1 + (n1 - 0.5) * r.flicker)
+      local strength = 0.05 + 0.3 * r.hsync
+      local rv = strength - n2
+      sh:send("syncScale", (rv > 0 and rv or 0) * strength * (r.hsync > 0 and 1 or 0))
+      sh:send("syncFreq", 4 + 36 * n1)
+      local tube = fx.phosphorColor[opts.phosphor or "off"]
+      sh:send("mono", tube and 1 or 0)
+      sh:send("phosphor", tube or fx.phosphorColor.amber)
+      sh:send("chroma", r.chroma)
+    end
+    love.graphics.setShader(sh)
   end
   love.graphics.setColor(1, 1, 1, opts.alpha or 1)
   love.graphics.draw(canvas, x, y, 0, scale, scale)

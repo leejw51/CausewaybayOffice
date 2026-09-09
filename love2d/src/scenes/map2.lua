@@ -408,14 +408,11 @@ function Map2:draw()
       G.panel(cx + 3, cy + 3, self.cardW - 6, self.cardH - 6, "ink", "cyan", 0.85)
     end
     G.led(cx + 10, cy + 12, col, true, self.t)
-    G.ui(fit(G, e.name, self.cardW - 36), cx + 22, cy + 8, "yellow")
-    G.ui(
-      fit(G, (e.host.user or "") .. "@" .. (e.host.host or ""), self.cardW - 20),
-      cx + 10,
-      cy + 26,
-      "white"
-    )
-    G.ui("port " .. (e.host.port or 22), cx + 10, cy + 41, "gray")
+    local Config = self.app.cfg
+    local shownName = Config.private() and e.name == e.host.host and "****" or e.name
+    G.ui(fit(G, shownName, self.cardW - 36), cx + 22, cy + 8, "yellow")
+    G.ui(fit(G, Config.who(e.host.user, e.host.host), self.cardW - 20), cx + 10, cy + 26, "white")
+    G.ui("port " .. (Config.private() and "**" or (e.host.port or 22)), cx + 10, cy + 41, "gray")
     G.ui(e.status, cx + 10, cy + 65, col)
     G.ui(e.favorite and "* favorite" or "session", cx + self.cardW - 92, cy + 65, "cyan")
     self.cards[#self.cards + 1] = { x = cx, y = cy, w = self.cardW, h = self.cardH, index = i }

@@ -289,7 +289,7 @@ function Files:draw()
     end
   end
   fit(
-    self.rec and (self.rec.user .. "@" .. self.rec.host) or "Session closed",
+    self.rec and self.app.cfg.who(self.rec.user, self.rec.host) or "Session closed",
     x + 12,
     y + 29,
     w - 120,

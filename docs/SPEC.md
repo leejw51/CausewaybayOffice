@@ -86,8 +86,18 @@ OPENAI_API_KEY / ANTHROPIC_API_KEY / XAI_API_KEY (GROK_API_KEY alias).
 * Boot: CRT power-on flash, logo fades in (expo-out), Causeway Bay skyline parallax.
 * Lobby: session cards on a shelf; new card slides in (expo-out), close pops out (expo-in).
   Cards pulse with the keepalive heartbeat; disconnected cards flicker red.
-* Terminal: scanline + subtle barrel overlay, cursor is a rust-coloured block that
-  breathes; bell = screen shake + flash; connect success = particle burst + jingle.
+* Terminal: cool-retro-term style screen (`fx.retro`, Settings "CRT phosphor fx" or the
+  GLOW status-bar button; "CRT tube colour" picks amber / green / white / off; the 1x/2x
+  status-bar button cycles the terminal zoom; PRIVACY (or Settings "privacy: mask ids")
+  draws every user, host, address and port as stars for screen capture, keeping only
+  session and node names):
+  phosphor burn-in that fades, quarter-res bloom, RGB shift, jitter, horizontal
+  sync tears, static noise, a sweeping glow line and flicker, on top of the
+  scanline + subtle barrel overlay. The cursor is a rust-coloured block that
+  breathes and glides between cells (expo in/out, duration grows with distance),
+  fading out on the way and back in on arrival, with an additive afterimage trail
+  and a puff of embers; bell = screen shake + flash; connect success = particle
+  burst + jingle.
 * World map: saved hosts are stages on a Super-Mario-World overworld; the hero walks
   the path graph (expo-in-out per segment, cosine bob, dust puffs), hops with confetti on
   arrival, then connects (amber node while connecting, flag + jingle when online, red
