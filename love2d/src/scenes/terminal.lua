@@ -1,0 +1,978 @@
+-- Terminal: tab strip + term_view + status bar for one session.
+-- Esc goes to the shell as a raw ESC; Ctrl+Esc or a double-tap Esc (300 ms)
+-- returns to the lobby. Ctrl+Tab / Ctrl+Shift+Tab cycle sessions with a
+-- horizontal slide, Ctrl+Space toggles the AI side panel, Ctrl+= / Ctrl+-
+-- zoom the grid (1x / 2x). A learned completion is shown as ghost text after
+-- the cursor; Right arrow or Ctrl+Space accepts it (Ctrl+Space is the macOS
+-- input-source switch on many keyboards, so Right is the reliable one).
+-- Everything else goes to the ssh session.
+--
+-- Geometry: the chrome (tab strip, status bar, AI panel) lives in virtual px
+-- at the UI scale D.s; the grid itself is drawn in *screen* px at
+-- D.termZoom so an 80x24 grid fits a 1080x800 window with the bezel on.
+-- self.ox/self.oy are the grid origin in virtual px, self.px/self.py the
+-- same in screen px (integers), self.gw/self.gh the grid size in virtual px.
+
+local Keys = require("src.keys")
+local UI = require("src.ui")
+local AIPanel = require("src.scenes.ai")
+
+local Term = {}
+Term.__index = Term
+
+local TAB_H = 16
+local TAB_BUTTONS =
+  { { "< LOBBY", true }, { "MAP", false }, { "MAP2", false }, { "AI CLOSE", false } }
+local STATUS_H = 16
+local PAD = 4
+local ESC_DOUBLE = 0.3
+local BACK_HINT = "F2 lobby  F1 help"
+
+function Term.new(app, params)
+  local s = setmetatable({}, Term)
+  s.app = app
+  s.id = params.id
+  s.t = 0
+  s.slide = { x = 0 }
+  s.prev = nil -- {view, x} sliding out
+  s.ai = nil
+  s.aiOpen = false
+  s.aiW = { w = 0 }
+  s.dragging = false
+  s.lastEsc = -1
+  s.buttons = {}
+  s.bells = 0 -- bells seen (tests / scripted QA read this)
+  s.hover = {} -- button id -> lift (px), tweened
+  s.toast = nil -- first-visit hint {a, t}
+  s.resizes = 0 -- cbo_session_resize calls issued by this scene
+  s.statusRight = "" -- what the status bar drew on the right (tests / QA read this)
+  s.statusRightX = 0
+  s.statusLeftEnd = 0
+  s.icons = {
+    {
+      "icon_ai",
+      function()
+        s:toggleAI()
+      end,
+    },
+    {
+      "icon_search",
+      function()
+        app.push("search")
+      end,
+    },
+  }
+  s.crtOpts = { crt = true, barrel = 0, scanline = 0.12, vignette = 0.22 }
+  s.prevOpts =
+    { crt = true, barrel = 0, scanline = 0.12, vignette = 0.22, showCursor = false, alpha = 0.7 }
+  return s
+end
+
+function Term:enter()
+  self:layout()
+  local cfg = self.app.cfg.get()
+  if not cfg.seenTermHint then
+    cfg.seenTermHint = true
+    self.app.cfg.save()
+    self.toast = { a = 0, t = 0 }
+    self.app.fx.tween(self.toast, { a = 1 }, 0.4, "expoOut")
+  end
+end
+
+function Term:toMap()
+  self.app.audio.play("select")
+  self.app.switch("map", { fromTerminal = true })
+end
+
+-- Context menu (right-click on the grid, wheel over the top bar).
+function Term:openMenu(mx, my)
+  local app = self.app
+  app.push("menu", {
+    title = "SESSION",
+    x = mx,
+    y = my,
+    items = {
+      {
+        "Back to lobby  (F2)",
+        function()
+          self:toLobby()
+        end,
+      },
+      {
+        "World map",
+        function()
+          self:toMap()
+        end,
+      },
+      {
+        "Rename  (^R)",
+        function()
+          app.push("rename", { id = self.id })
+        end,
+      },
+      {
+        "Disconnect session",
+        function()
+          app.disconnectSession(app.sessions.get(self.id))
+        end,
+      },
+      {
+        "Help  (F1)",
+        function()
+          app.push("help")
+        end,
+      },
+    },
+  })
+end
+
+function Term:leave()
+  if self.ai then
+    self.ai:close()
+  end
+end
+
+-- AI panel width (virtual px): up to 256 / 42% of the content, but it
+-- yields so the grid keeps 80 columns whenever the window allows, and it
+-- never goes below 140 (about 15 chat characters per line).
+function Term.aiWidthFor(D)
+  local w = math.min(256, math.floor(D.vw * 0.42))
+  local keep80 = D.vw - PAD * 2 - math.ceil(80 * 8 * D.termZoom / D.s)
+  return math.max(140, math.min(w, keep80))
+end
+
+-- Where the AI panel docks: beside the grid (landscape) or below it
+-- (portrait: the grid keeps the full width and at least 24 rows).
+function Term.aiDock(D)
+  return D.portrait and "bottom" or "right"
+end
+
+function Term.aiHeightFor(D)
+  local rowsPx = math.ceil(24 * 16 * D.termZoom / D.s)
+  local free = D.vh - TAB_H - STATUS_H - PAD * 2
+  local h = math.floor(D.vh * 0.45)
+  -- Short portrait windows still need a readable chat, even when 24 terminal
+  -- rows and a useful chat cannot both fit. Tall portrait keeps those 24 rows.
+  return math.min(math.max(144, math.min(h, free - rowsPx)), math.max(100, free - 96))
+end
+
+-- Panel size along its dock axis (width when right, height when bottom).
+function Term.aiSizeFor(D)
+  if Term.aiDock(D) == "bottom" then
+    return Term.aiHeightFor(D)
+  end
+  return Term.aiWidthFor(D)
+end
+
+function Term:aiWidth()
+  return Term.aiSizeFor(self.app.D)
+end
+
+-- Tab strip rows: the session name always gets printed at the top. When the
+-- nav buttons leave no room beside them (portrait, narrow windows) the name,
+-- host and index move to a second title row instead of being cut to "…".
+function Term.titleRows(D, rec, G)
+  if not rec or not G then
+    return 1
+  end
+  local buttons = 4 + 4 + 12 -- gaps + led
+  for _, b in ipairs(TAB_BUTTONS) do
+    buttons = buttons + G.uiWidth(b[1]) + (b[2] and 26 or 12) + 4
+  end
+  local icons = 8 + 20 * 2 + 8
+  local room = D.vw - buttons - icons
+  local idx = "[00/00]"
+  local need = G.uiWidth(rec.name or "")
+    + 10
+    + G.uiWidth((rec.user or "") .. "@" .. (rec.host or ""))
+    + 10
+    + G.uiWidth(idx)
+  return need > room and 2 or 1
+end
+
+-- Height of the chrome above the grid (tab strip, plus the title row).
+function Term:chromeTop()
+  local app = self.app
+  return TAB_H * Term.titleRows(app.D, app.sessions.get(self.id), app.G)
+end
+
+-- Free area for the grid given the AI panel size along its dock axis.
+function Term.availFor(D, aiSize, top)
+  local availW = D.vw - PAD * 2
+  local availH = D.vh - (top or TAB_H) - STATUS_H - PAD * 2
+  if Term.aiDock(D) == "bottom" then
+    availH = availH - aiSize
+  else
+    availW = availW - aiSize
+  end
+  return availW, availH
+end
+
+-- Grid the terminal scene would give a session right now (used by the
+-- connect dialog / --demo so a session opens at its final size).
+function Term.grid(D, aiOpen)
+  local availW, availH = Term.availFor(D, aiOpen and Term.aiSizeFor(D) or 0)
+  return D.termGrid(availW, availH)
+end
+
+-- Compute grid + resize the session to fit the available area. The session
+-- is resized only when the grid actually changed (window resize, bezel
+-- toggle, zoom, AI panel open/close).
+function Term:layout()
+  local app = self.app
+  local D = app.D
+  local zoom = D.termZoom
+  local aiW = self.aiOpen and self:aiWidth() or 0
+  local top = self:chromeTop()
+  self.top = top
+  local availW, availH = Term.availFor(D, aiW, top)
+  local cols, rows = D.termGrid(availW, availH, zoom)
+  self.cols, self.rows = cols, rows
+  self.zoom = zoom
+  -- cell size in virtual px (fractional when zoom < D.s)
+  self.cellW, self.cellH = 8 * zoom / D.s, 16 * zoom / D.s
+  self.gw, self.gh = cols * self.cellW, rows * self.cellH
+  -- origin: centred in the free area, snapped to whole screen pixels
+  self.px = PAD * D.s + math.floor((availW - self.gw) * D.s / 2)
+  self.py = (top + PAD) * D.s + math.floor((availH - self.gh) * D.s / 2)
+  self.ox, self.oy = self.px / D.s, self.py / D.s
+  self.aiTargetW = aiW
+  if self.id ~= nil and app.sessions.get(self.id) then
+    local info = app.core.info(self.id)
+    if info and (info.cols ~= cols or info.rows ~= rows) then
+      app.core.resize(self.id, cols, rows)
+      self.resizes = self.resizes + 1
+      self:view().dirty = true -- re-snapshot now, not at the next generation
+    end
+  end
+end
+
+function Term:resize()
+  if self.aiTween then
+    self.app.fx.cancel(self.aiTween)
+    self.aiTween = nil
+  end
+  self:layout()
+  self.aiW.w = self.aiTargetW
+end
+
+function Term:setZoom(z)
+  local D = self.app.D
+  if D.setTermZoom(z) ~= self.zoom then
+    self.app.cfg.get().termZoom = D.termZoom
+    self.app.cfg.save()
+    self:layout()
+    self.app.audio.play("click")
+    self.app.fx.flash(0.12, 1, 1, 1, 0.12)
+  else
+    self.app.fx.shake(1, 0.1)
+  end
+end
+
+function Term:view()
+  return self.app.view(self.id)
+end
+
+function Term:cycle(dir)
+  local app = self.app
+  local rec = app.sessions.neighbor(self.id, dir)
+  if not rec or rec.id == self.id then
+    app.fx.shake(1, 0.1)
+    return
+  end
+  local D = app.D
+  self.prev = { view = self:view(), x = 0, id = self.id }
+  app.fx.tween(self.prev, { x = -dir * D.vw }, 0.32, "expoOut", function()
+    self.prev = nil
+  end)
+  self.id = rec.id
+  self.slide.x = dir * D.vw
+  app.fx.tween(self.slide, { x = 0 }, 0.32, "expoOut")
+  app.audio.play("select")
+  if self.ai then
+    self.ai:close()
+    self.ai = AIPanel.new(app, self.id)
+  end
+  self:layout()
+end
+
+-- The panel slides (expo) over the old grid; the session is resized once,
+-- when the slide has finished, so the shell sees a single SIGWINCH.
+function Term:toggleAI()
+  local app = self.app
+  self.aiOpen = not self.aiOpen
+  if self.aiOpen and not self.ai then
+    self.ai = AIPanel.new(app, self.id)
+  end
+  local target = self.aiOpen and self:aiWidth() or 0
+  self.aiTargetW = target
+  self.aiTween = app.fx.tween(
+    self.aiW,
+    { w = target },
+    0.32,
+    self.aiOpen and "expoOut" or "expoIn",
+    function()
+      self.aiTween = nil
+      self:layout()
+    end
+  )
+  app.audio.play(self.aiOpen and "open" or "close")
+end
+
+function Term:toLobby()
+  self.app.audio.play("select")
+  self.app.switch("lobby", { select = self.id })
+end
+
+function Term:update(dt)
+  self.t = self.t + dt
+  if self.toast then
+    self.toast.t = self.toast.t + dt
+    if self.toast.t > 3 and not self.toast.fading then
+      self.toast.fading = true
+      local toast = self.toast
+      self.app.fx.tween(toast, { a = 0 }, 0.6, "expoIn", function()
+        if self.toast == toast then
+          self.toast = nil
+        end
+      end)
+    end
+  end
+  local app = self.app
+  local rec = app.sessions.get(self.id)
+  if not rec then
+    if not app.fx.transitioning then
+      app.switch("lobby")
+    end
+    return
+  end
+  self.assistAge = (self.assistAge or 0) + dt
+  if self.assistAge >= 0.12 then
+    self.assistAge = 0
+    self:refreshCompletion()
+  end
+  local tv = self:view()
+  tv:update(dt)
+  if self.prev and self.prev.view then
+    self.prev.view:update(dt)
+  end
+  local bells = tv:pollBell()
+  if bells > 0 then
+    self.bells = self.bells + bells
+    app.fx.shake(3, 0.12)
+    app.fx.flash(0.35, 1, 1, 1, 0.12)
+    app.audio.play("bell")
+  end
+  if self.ai then
+    self.ai:update(dt)
+  end
+  for _, r in ipairs(app.sessions.list) do
+    if r.id ~= self.id then
+      app.view(r.id):update(dt)
+    end
+  end
+end
+
+function Term:refreshCompletion()
+  local core = self.app.core
+  local rec = self.app.sessions.get(self.id)
+  self.suggestion = nil
+  if self.aiOpen or not rec or not core.canComplete(self.id) then
+    return
+  end
+  local prefix = core.typing(self.id)
+  local candidates = prefix == "" and core.predictNext(rec.hostId or 0, 8)
+    or core.complete(rec.hostId or 0, prefix, 8)
+  for _, row in ipairs(candidates) do
+    if
+      row.cmd:sub(1, #prefix) == prefix
+      and #row.cmd > #prefix
+      and not row.cmd:find("[%z\1-\31\127]")
+    then
+      self.suggestion, self.completionPrefix = row.cmd, prefix
+      return
+    end
+  end
+end
+function Term:acceptCompletion()
+  self:refreshCompletion()
+  if not self.suggestion then
+    self.app.toast("No learned completion for this line yet")
+    return false
+  end
+  local suffix = self.suggestion:sub(#self.completionPrefix + 1)
+  -- Only append the missing suffix. Enter is always a separate user action.
+  self:write(suffix)
+  self.suggestion = nil
+  return true
+end
+
+function Term:write(bytes)
+  self.app.core.write(self.id, bytes)
+  if self.app.core.scrollOffset(self.id) ~= 0 then
+    self.app.core.scroll(self.id, 0)
+  end
+end
+
+-- Right arrow with no modifier accepts the ghost text: the cursor is already
+-- at the end of the typed line, so the shell would ignore the key anyway.
+function Term:acceptsWithRight(key, m)
+  return key == "right"
+    and not (m.ctrl or m.shift or m.alt or m.gui)
+    and not self.aiOpen
+    and self.suggestion ~= nil
+end
+
+function Term:keypressed(key, m)
+  if key == "space" and m.ctrl and not m.shift and not self.aiOpen then
+    self:refreshCompletion()
+    if self.suggestion then
+      return self:acceptCompletion()
+    end
+    return self:toggleAI()
+  end
+  if self:acceptsWithRight(key, m) then
+    self:refreshCompletion()
+    if self.suggestion then
+      return self:acceptCompletion()
+    end
+  end
+  local app = self.app
+  local chord = Keys.appChord(key, m)
+  -- Chat owns clipboard input. Never route a chat paste/copy to the SSH shell.
+  if self.aiOpen and self.ai and chord == "paste" then
+    self.ai.input:keypressed("v", m)
+    return
+  elseif self.aiOpen and self.ai and chord == "copy" then
+    if self.ai.input.selectAll then
+      love.system.setClipboardText(self.ai.input.value)
+    end
+    return
+  end
+  if chord == "cycle" then
+    return self:cycle(1)
+  elseif chord == "cycleBack" then
+    return self:cycle(-1)
+  elseif chord == "ai" then
+    return self:toggleAI()
+  elseif chord == "lobby" then
+    return self:toLobby()
+  elseif chord == "new" then
+    return app.push("connect", { fromTerminal = true })
+  elseif chord == "history" then
+    return app.push("history", { id = self.id })
+  elseif chord == "search" then
+    return app.push("search")
+  elseif chord == "rename" then
+    return app.push("rename", { id = self.id })
+  elseif chord == "settings" then
+    return app.push("settings")
+  elseif chord == "help" then
+    return app.push("help")
+  elseif chord == "paste" then
+    local clip = love.system.getClipboardText() or ""
+    if clip ~= "" then
+      if clip:find("[\r\n%z\1-\31\127]") and not app.core.bracketedPaste(self.id) then
+        app.push("paste", { id = self.id, text = clip })
+      else
+        app.core.paste(self.id, clip)
+      end
+    end
+    return
+  elseif chord == "copy" then
+    local tv = self:view()
+    local text = tv:selectedText()
+    if text and text ~= "" then
+      love.system.setClipboardText(text)
+      tv.sel = nil
+      app.fx.flash(0.15, 0.4, 0.86, 0.94, 0.25)
+    else
+      self:write("\x03")
+    end
+    return
+  elseif chord == "quit" then
+    love.event.quit()
+    return
+  elseif chord == "zoomIn" then
+    return self:setZoom(self.app.D.termZoom + 1)
+  elseif chord == "zoomOut" then
+    return self:setZoom(self.app.D.termZoom - 1)
+  end
+
+  -- AI panel owns the keyboard while open
+  if self.aiOpen and self.ai then
+    if key == "escape" then
+      -- single Esc closes the panel (cancels a running request first)
+      if not self.ai:cancel() then
+        self:toggleAI()
+      end
+      return
+    end
+    self.ai:keypressed(key, m)
+    return -- unused chat keys must not leak to the remote terminal
+  end
+
+  -- Shift+PgUp / Shift+PgDn page through the scrollback (plain PgUp goes
+  -- to the shell as \x1b[5~ so less/vim keep working)
+  if m.shift and (key == "pageup" or key == "pagedown") then
+    self:scrollBy(key == "pageup" and (self.rows or 24) or -(self.rows or 24))
+    return
+  end
+  if key == "escape" then
+    local now = love.timer.getTime()
+    if now - self.lastEsc < ESC_DOUBLE then
+      self.lastEsc = -1
+      return self:toLobby()
+    end
+    self.lastEsc = now
+    self:write("\x1b")
+    return
+  end
+  local bytes = Keys.translate(key, m)
+  if bytes then
+    self:write(bytes)
+    app.audio.play("click")
+  end
+end
+
+function Term:textinput(t)
+  if self.aiOpen and self.ai then
+    self.ai:textinput(t)
+    return
+  end
+  self:write(t)
+  self.app.audio.play("click")
+end
+
+function Term:scrollBy(lines)
+  local core = self.app.core
+  local off = core.scrollOffset(self.id) + lines
+  off = math.max(0, math.min(off, core.scrollbackLen(self.id)))
+  core.scroll(self.id, off)
+end
+
+function Term:wheelmoved(_, dy)
+  local mx, my = self.app.D.toVirtual(love.mouse.getPosition())
+  -- the context menu only for a wheel *over the tab strip*; a cursor parked
+  -- above or beside the window must not steal the scrollback wheel
+  if my >= 0 and my < (self.top or TAB_H) and mx >= 0 and mx <= self.app.D.vw then
+    if not self.app.hasOverlay("menu") then
+      self:openMenu(4, (self.top or TAB_H) + 2)
+    end
+    return
+  end
+  if self.aiOpen and self.ai and self.ai:hover() then
+    self.ai:wheelmoved(dy)
+    return
+  end
+  self:scrollBy(dy * 3)
+end
+
+function Term:mousepressed(mx, my, b)
+  if b == 2 then
+    self:openMenu(mx, my)
+    return
+  end
+  if b ~= 1 then
+    return
+  end
+  if self.completionBox and UI.inside(mx, my, unpack(self.completionBox)) then
+    return self:acceptCompletion()
+  end
+  for _, bt in ipairs(self.buttons) do
+    if UI.inside(mx, my, bt.x, bt.y, bt.w, bt.h) then
+      self.app.audio.play("click")
+      bt.fn()
+      return
+    end
+  end
+  if self.aiOpen and self.ai and self.ai:hover(mx, my) then
+    self.ai:mousepressed(mx, my, b)
+    return
+  end
+  local tv = self:view()
+  local cx, cy = self:cellAt(mx, my)
+  tv.sel = { x0 = cx, y0 = cy, x1 = cx, y1 = cy }
+  self.dragging = true
+end
+
+-- Virtual px (content space) -> grid cell.
+function Term:cellAt(mx, my)
+  local D = self.app.D
+  return self:view():cellAt(mx * D.s - self.px, my * D.s - self.py, self.zoom or 1)
+end
+
+function Term:updateHover(mx, my)
+  for _, bt in ipairs(self.buttons) do
+    if bt.id then
+      local over = UI.inside(mx, my, bt.x, bt.y, bt.w, bt.h)
+      local h = self.hover[bt.id]
+      if not h then
+        h = { lift = 0, over = false }
+        self.hover[bt.id] = h
+      end
+      if over ~= h.over then
+        h.over = over
+        self.app.fx.tween(h, { lift = over and 2 or 0 }, 0.18, "expoOut")
+      end
+    end
+  end
+end
+
+function Term:mousemoved(mx, my)
+  self:updateHover(mx, my)
+  if self.dragging then
+    local tv = self:view()
+    local cx, cy = self:cellAt(mx, my)
+    tv.sel.x1, tv.sel.y1 = cx, cy
+  end
+end
+
+function Term:mousereleased()
+  if self.dragging then
+    self.dragging = false
+    local tv = self:view()
+    local s = tv.sel
+    if s and s.x0 == s.x1 and s.y0 == s.y1 then
+      tv.sel = nil
+    end
+  end
+end
+
+local function stateStyle(ST, st)
+  if st == ST.CONNECTED then
+    return "lgreen", "ONLINE"
+  elseif st == ST.CONNECTING then
+    return "amber", "CONNECTING"
+  elseif st == ST.ERROR then
+    return "alarm", "ERROR"
+  elseif st == ST.CLOSED then
+    return "gray", "CLOSED"
+  end
+  return "dgray", "IDLE"
+end
+
+-- The learned completion, dimmed, from the cursor cell to the right edge.
+-- Drawn in grid space (screen px, 8x16 cells at the terminal zoom).
+function Term:drawGhost(tv, zoom)
+  local suffix = self:ghostText()
+  if not suffix or not tv.cvis or tv.cx >= (tv.cols or 0) or tv.cy >= (tv.rows or 0) then
+    return
+  end
+  local G = self.app.G
+  local room = tv.cols - tv.cx
+  local shown, width = "", 0
+  for ch in suffix:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    local w = self.app.core.utf8Width and self.app.core.utf8Width(ch) or 1
+    if width + w > room then
+      break
+    end
+    shown, width = shown .. ch, width + w
+  end
+  if shown == "" then
+    return
+  end
+  self.ghostShown = shown
+  love.graphics.setFont(G.fontTerm)
+  G.color("gray", 0.75)
+  love.graphics.print(shown, tv.cx * 8 * zoom, tv.cy * 16 * zoom, 0, zoom, zoom)
+end
+
+-- The part of the suggestion the user has not typed yet (nil when none).
+function Term:ghostText()
+  if self.aiOpen or not self.suggestion then
+    return nil
+  end
+  local suffix = self.suggestion:sub(#(self.completionPrefix or "") + 1)
+  if suffix == "" then
+    return nil
+  end
+  return suffix
+end
+
+function Term:drawTabStrip(rec)
+  local app = self.app
+  local G, D = app.G, app.D
+  local vw = D.vw
+  local ST = app.core.ST
+  self.buttons = {}
+  local rows = Term.titleRows(D, rec, G)
+  local top = TAB_H * rows
+  love.graphics.setColor(0.10, 0.12, 0.31, 1)
+  love.graphics.rectangle("fill", 0, 0, vw, top)
+  G.color("rust")
+  love.graphics.rectangle("fill", 0, top - 1, vw, 1)
+  local Lobby = require("src.scenes.lobby")
+  -- "◀ LOBBY" / "MAP" buttons (card_frame style, lift 2px on hover)
+  local x = 4
+  local function button(id, label, icon, fn)
+    local w = G.uiWidth(label) + (icon and 26 or 12)
+    local lift = (self.hover[id] and self.hover[id].lift) or 0
+    local by = 1 - math.floor(lift + 0.5)
+    G.frame(x, by, w, TAB_H - 2, 1)
+    if icon then
+      G.drawIcon(icon, x + 5, by + 1, 12)
+    end
+    G.ui(label, x + (icon and 20 or 6), by + 4, "yellow")
+    self.buttons[#self.buttons + 1] = { id = id, x = x, y = 0, w = w, h = TAB_H, fn = fn }
+    x = x + w + 4
+  end
+  button("lobby", "< LOBBY", "icon_session", function()
+    self:toLobby()
+  end)
+  button("map", "MAP", nil, function()
+    self:toMap()
+  end)
+  button("map2", "MAP2", nil, function()
+    app.switch("map2")
+  end)
+  button("ai", self.aiOpen and "AI CLOSE" or "AI CHAT", nil, function()
+    self:toggleAI()
+  end)
+  x = x + 4
+  G.drawFrame(G.ledStrip(8), Lobby.ledFrame(G, ST, rec.state, self.t), x, 4, 1, 1)
+  x = x + 12
+  -- right: icons (ai, search) + hint; the middle wraps/truncates to fit
+  local ix = vw - 8 - 20 * 2 - (app.core.mock and 84 or 0)
+  local limit = ix - 8
+  local function fit(txt, col, gap)
+    local room = limit - x
+    if room < G.uiWidth("…") + 8 then
+      return false
+    end
+    local t = txt
+    while G.uiWidth(t .. "…") > room and #t > 1 do
+      t = t:sub(1, -2)
+    end
+    if t ~= txt then
+      t = t .. "…"
+    end
+    G.ui(t, x, 4, col)
+    x = x + G.uiWidth(t) + (gap or 10)
+    return t == txt
+  end
+  local hostTxt = rec.user .. "@" .. rec.host
+  local idx = string.format("[%d/%d]", app.sessions.index(self.id) or 0, app.sessions.count())
+  if rows == 2 then
+    -- title row: the whole name, then host and index as room allows
+    local saveX, saveLimit = x, limit
+    x, limit = 8, vw - 8
+    love.graphics.setColor(0.08, 0.10, 0.26, 1)
+    love.graphics.rectangle("fill", 0, TAB_H, vw, TAB_H - 1)
+    local function fitRow(txt, col, gap)
+      local room = limit - x
+      local t = txt
+      while G.uiWidth(t .. "…") > room and #t > 1 do
+        t = t:sub(1, -2)
+      end
+      if t ~= txt then
+        t = t .. "…"
+      end
+      G.ui(t, x, TAB_H + 4, col)
+      x = x + G.uiWidth(t) + (gap or 10)
+      return t == txt
+    end
+    if fitRow(rec.name, "yellow") and fitRow(hostTxt, "cyan") then
+      fitRow(idx, "gray")
+    end
+    x, limit = saveX, saveLimit
+  else
+    fit(rec.name, "yellow")
+    if fit(hostTxt, "cyan") then
+      fit(idx, "gray")
+    end
+  end
+  local ix0 = ix
+  for _, ic in ipairs(self.icons) do
+    G.drawIcon(ic[1], ix, 0, 16)
+    self.buttons[#self.buttons + 1] = { x = ix, y = 0, w = 16, h = 16, fn = ic[2] }
+    ix = ix + 20
+  end
+  local panelOpen = self.aiOpen or #app.overlays > 0
+  local hint = panelOpen and "Esc close"
+    or (self.suggestion and "Right accept" or "^Space complete")
+  local hx = ix0 - G.uiWidth(hint) - 12
+  if hx > x + 4 then
+    G.ui(hint, hx, 4, panelOpen and "yellow" or "dgray")
+  end
+end
+
+function Term:drawStatus(rec)
+  local app = self.app
+  local G, D = app.G, app.D
+  local vw, vh = D.vw, D.vh
+  local y = vh - STATUS_H
+  local ST = app.core.ST
+  love.graphics.setColor(0.10, 0.12, 0.31, 1)
+  love.graphics.rectangle("fill", 0, y, vw, STATUS_H)
+  G.color("rust")
+  love.graphics.rectangle("fill", 0, y, vw, 1)
+  local ledCol, stTxt = stateStyle(ST, rec.state)
+  local Lobby = require("src.scenes.lobby")
+  G.drawFrame(G.ledStrip(8), Lobby.ledFrame(G, ST, rec.state, self.t), 6, y + 5, 1, 1)
+  local x = 18
+  -- keepalive countdown
+  local ka = app.cfg.get().keepaliveSeconds or 15
+  local info = rec.info
+  local kaTxt = "keepalive off"
+  if info and info.last_ping_ms > 0 and ka > 0 then
+    local left = ka - (app.core.nowMs() - info.last_ping_ms) / 1000
+    kaTxt = string.format("%2ds keepalive", math.max(0, math.floor(left + 0.5)))
+  elseif ka > 0 then
+    kaTxt = string.format("%2ds keepalive", ka)
+  end
+  G.ui(kaTxt, x, y + 5, rec.pulse > 0 and "lgreen" or "gray")
+  x = x + G.uiWidth(kaTxt) + 12
+  if info and info.last_activity_ms > 0 then
+    local idle = math.max(0, (app.core.nowMs() - info.last_activity_ms) / 1000)
+    local idleTxt = string.format("idle %ds", math.floor(idle))
+    G.ui(idleTxt, x, y + 5, "gray")
+    x = x + G.uiWidth(idleTxt) + 12
+  end
+  G.ui(stTxt, x, y + 5, ledCol)
+  x = x + G.uiWidth(stTxt) + 12
+  -- the way back is always visible on the right; the grid info only when it fits
+  local back = BACK_HINT
+  local grid = string.format("UTF-8  %dx%d  %dx  ", self.cols or 0, self.rows or 0, self.zoom or 1)
+  local right = grid .. back
+  if vw - G.uiWidth(right) - 8 <= x then
+    right = back
+  end
+  local rightX = vw - G.uiWidth(right) - 8
+  self.statusRight, self.statusRightX, self.statusLeftEnd = right, rightX, x
+  if rec.state == ST.ERROR then
+    -- the error message gets the room between the state and the right block
+    local full = app.core.error(self.id)
+    local err = full
+    local room = rightX - 12 - x
+    while G.uiWidth(err .. "…") > room and #err > 1 do
+      err = err:sub(1, -2)
+    end
+    if room > G.uiWidth("…") then
+      G.ui(err .. (err == full and "" or "…"), x, y + 5, "alarm")
+    end
+  end
+  if rightX <= x then
+    -- no room beside the state: draw the way back over a dark tab instead
+    love.graphics.setColor(0.10, 0.12, 0.31, 1)
+    love.graphics.rectangle("fill", rightX - 4, y + 1, vw - rightX + 4, STATUS_H - 1)
+  end
+  G.ui(right, rightX, y + 5, "gray")
+  self.completionBox = nil
+  if self.suggestion then
+    local width = math.max(0, rightX - 12)
+    local text = "-> " .. self.suggestion .. "   (Right / ^Space)"
+    local utf8 = require("utf8")
+    while G.uiWidth(text) > width - 8 and #text > 0 do
+      text = text:sub(1, (utf8.offset(text, -1) or 1) - 1)
+    end
+    if width > 60 then
+      G.panel(4, y + 1, width, STATUS_H - 2, "ink", "cyan")
+      G.ui(text, 8, y + 5, "cyan")
+      self.completionBox = { 4, y + 1, width, STATUS_H - 2 }
+    end
+  end
+end
+
+-- Push a transform whose unit is one screen pixel, origin at the grid's
+-- top-left (including the content offset and the bell shake).
+function Term:pushGridSpace(dxVirtual)
+  local app = self.app
+  local D, fx = app.D, app.fx
+  love.graphics.push()
+  love.graphics.origin()
+  love.graphics.translate(
+    (D.ox + fx.shakeX) * D.s + self.px + math.floor((dxVirtual or 0) * D.s),
+    (D.oy + fx.shakeY) * D.s + self.py
+  )
+end
+
+function Term:draw()
+  local app = self.app
+  local G, D = app.G, app.D
+  local cfg = app.cfg.get()
+  local rec = app.sessions.get(self.id)
+  if not rec then
+    return
+  end
+  local vw, vh = D.vw, D.vh
+  G.color("black")
+  love.graphics.rectangle("fill", 0, 0, vw, vh)
+
+  local zoom = self.zoom or D.termZoom
+  local crtOpts, prevOpts = self.crtOpts, self.prevOpts
+  crtOpts.crt = cfg.crt ~= false
+  crtOpts.barrel = cfg.barrel and 0.04 or 0
+  prevOpts.crt, prevOpts.barrel = crtOpts.crt, crtOpts.barrel
+  if self.prev and self.prev.view then
+    self:pushGridSpace(self.prev.x)
+    self.prev.view:draw(0, 0, zoom, prevOpts)
+    love.graphics.pop()
+  end
+  local tv = self:view()
+  local sx = math.floor(self.slide.x)
+  self:pushGridSpace(sx)
+  tv:draw(0, 0, zoom, crtOpts)
+  self:drawGhost(tv, zoom)
+  love.graphics.pop()
+
+  -- scrollback badge (UI chrome, drawn at the UI scale)
+  local off = app.core.scrollOffset(self.id)
+  if off > 0 then
+    local total = app.core.scrollbackLen(self.id)
+    local label = string.format("^ %d/%d", off, total)
+    local w = G.uiWidth(label) + 8
+    local bx = math.floor(self.ox + self.gw) - w - 4
+    G.panel(bx, self.oy + 4, w, 14, "ink", "cyan", 0.9)
+    G.ui(label, bx + 4, self.oy + 7, "cyan")
+  end
+
+  -- connecting / error veil
+  if rec.state ~= app.core.ST.CONNECTED then
+    local ST = app.core.ST
+    love.graphics.setColor(0, 0, 0, 0.45)
+    love.graphics.rectangle("fill", self.ox, self.oy, self.gw, self.gh)
+    local msg
+    local col = "amber"
+    if rec.state == ST.CONNECTING then
+      local dots = string.rep(".", math.floor(self.t * 3) % 4)
+      msg = "CONNECTING " .. rec.user .. "@" .. rec.host .. dots
+    elseif rec.state == ST.ERROR then
+      msg = "ERROR: " .. app.core.error(self.id)
+      col = "alarm"
+    else
+      msg = "SESSION CLOSED  (Ctrl+Esc: lobby)"
+      col = "gray"
+    end
+    local w = G.uiWidth(msg) + 24
+    local cx = math.floor(self.ox + (self.gw - w) / 2)
+    local cy = math.floor(self.oy + self.gh / 2) - 12
+    G.frame(cx, cy, w, 24, 1)
+    G.ui(msg, cx + 12, cy + 8, col)
+  end
+
+  if self.ai and self.aiW.w > 0.5 then
+    local size = math.floor(self.aiW.w)
+    if Term.aiDock(D) == "bottom" then
+      self.ai:draw(0, vh - STATUS_H - size, vw, size, self.t)
+    else
+      local top = self.top or TAB_H
+      self.ai:draw(vw - size, top, size, vh - top - STATUS_H, self.t)
+    end
+  end
+
+  self:drawTabStrip(rec)
+  self:drawStatus(rec)
+  if self.toast then
+    local msg = "F2 or Esc Esc returns to the lobby"
+    local w = G.uiWidth(msg) + 24
+    local tx = math.floor((vw - w) / 2)
+    local ty = (self.top or TAB_H) + 8
+    G.frame(tx, ty, w, 24, self.toast.a)
+    G.ui(msg, tx + 12, ty + 8, "yellow", self.toast.a)
+  end
+end
+
+Term.STATUS_H = STATUS_H
+Term.TAB_H = TAB_H
+return Term

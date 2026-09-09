@@ -1,0 +1,25 @@
+[package]
+name = "cbo_core"
+version = "0.1.0"
+edition = "2021"
+description = "CAUSEWAYBAY OFFICE core: SSH transport, terminal emulation, LLM streaming (C ABI)"
+license = "MIT"
+
+[lib]
+name = "cbo_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+vt100 = "0.15"
+ureq = { version = "2.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-width = "0.2"
+libc = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[profile.release]
+opt-level = 3
+debug = false
+panic = "unwind"

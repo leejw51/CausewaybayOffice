@@ -1,0 +1,40 @@
+# Rust
+rust/target/
+
+# LÖVE build output: the .love archive, the .app bundle, the zip.
+love2d/build/
+*.love
+
+# Test scratch (the in-engine suite writes its save dir here).
+.tmp_save_test
+love2d/.tmp_save_test
+
+python/__pycache__/
+*.pyc
+*.tmp
+*.swp
+*~
+.DS_Store
+.cursor/
+
+# Never commit secrets or local user data (this repo is public).
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+known_hosts*
+*.jsonl
+*.db
+*.db-shm
+*.db-wal
+config.json
+error.log
+qa*.log
+.claude/
+.vscode/
+.idea/
+# test pictures dropped in the repo root for the kitty image tool
+/*.png
