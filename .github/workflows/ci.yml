@@ -96,7 +96,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends luajit
 
       - name: Install stylua
-        uses: JohnnyMorganz/stylua-action@v4
+        uses: JohnnyMorganz/stylua-action@479972f01e665acfcba96ada452c36608bdbbb5e # v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest

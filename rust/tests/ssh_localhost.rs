@@ -1,4 +1,5 @@
-//! Real SSH against the local sshd (CBO_IT=1 or 127.0.0.1:22 answering;
+//! Real SSH against the local sshd (CBO_IT=1, or 127.0.0.1:22 answering and
+//! CBO_IT unset; CBO_IT=0 forces them off, which is what CI does;
 //! otherwise every test prints "skipped" and passes). All tests share the
 //! global registry, so they serialise on `common::SERIAL`.
 

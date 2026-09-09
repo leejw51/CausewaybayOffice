@@ -297,6 +297,21 @@ verify-archive:
 		echo "  the archive is missing:$$missing" >&2; exit 1; \
 	fi; \
 	echo "  archive carries every module ($$n files)"
+	@# The Lua sweep above is an enumeration, so it cannot notice a whole
+	@# directory that stopped being staged. These are the assets the app dies
+	@# without: a font it draws every glyph with, the key art the boot scene
+	@# fades in, and the map graph the lobby reads. Named, not counted.
+	@missing=""; \
+	for asset in assets/fonts/PressStart2P.ttf assets/fonts/unifont.otf \
+	             assets/logo_hero.png assets/map_nodes.json; do \
+		unzip -Z1 "$(ARCHIVE)" | grep -qxF "$$asset" || missing="$$missing $$asset"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "  the archive is missing:$$missing" >&2; \
+		echo "  (an asset directory stopped being staged)" >&2; \
+		exit 1; \
+	fi; \
+	echo "  archive carries the assets the app cannot start without"
 
 # The portable bundle: needs LÖVE 11 on the machine that runs it.
 package: core love
