@@ -52,9 +52,9 @@ UI work.
 | F11 | Fullscreen |
 | Esc | Raw ESC to the shell (vim-safe); closes a panel or overlay |
 | F2 / Ctrl+Esc / Esc Esc | Back to the lobby (Esc double-tap within 300 ms); also the "◀ LOBBY" button in the top bar |
-| Right-click / wheel on top bar | Context menu: lobby, map, rename, close session, help |
-| M | World map (from the lobby); Esc / M / F2 returns. Arrows/WASD move along the paths, Enter walks the hero there and connects, R rename, Del forget host, [ ] page |
-| G / MAP2 button | Session grid: search by name/address; filter All, Online, Connecting, Offline, Error or Favorites |
+| Right-click / wheel on top bar | Context menu: lobby, rename, close session, help |
+| Map 1 | World-map lobby: arrows/WASD move along paths, Enter walks and connects, R rename, Del forget host, [ ] page |
+| Map 2 | Session-grid lobby: search by name/address; Tab cycles filters, Esc clears search and filters |
 | F11 / Settings > display | Fullscreen (desktop) or window, remembered in SQLite and logged to display.jsonl |
 | Ctrl+O / Settings > orientation | auto / landscape / portrait layout (portrait: 1-2 card columns, AI panel below the terminal, the same horizontal map fitted to the width) |
 
@@ -136,20 +136,24 @@ provider's API and nowhere else:
 Keys are entered in Settings (Ctrl+,) and saved in the private local SQLite database; an environment variable is used when the settings field is
 empty.
 
-## Two maps and automatic Favorites
+## One lobby, two layouts, and automatic Favorites
 
-* **Map**: the Mario-style world map. Click an empty stage (or select it and press
+* **Map 1**: the Mario-style world map. Click an empty stage (or select it and press
   Enter) to open the connection form. The new server stays on that stage.
-* **Map2**: a grid of live sessions and saved servers. Type in the search box,
+* **Map 2**: a grid of live sessions and saved servers. Type in the search box,
   select a connection-state filter or Favorites, and click a card to open it.
-  Tab cycles filters; arrows select cards; the wheel scrolls the grid.
+  Both layouts have **+ NEW** and **DISCONNECT** buttons. Map 1 opens the new
+  connection form in the selected empty slot. Tab cycles Map 2 filters; arrows
+  select cards; the wheel scrolls the grid.
   A moving selection frame follows the chosen card. Right-click a live card, or
-  press Delete, to choose **Disconnect**.
+  press Delete, to choose **Disconnect**. The terminal also has a **DISCONNECT** button.
 * Every server you connect to is automatically saved as a **Favorite**, deduplicated
   by user, host and port. Favorites persist across restarts and are not evicted
   when more servers are added. They also appear in the connection form.
-* Use the MAP/MAP2 buttons to switch views. In the lobby, **M** opens Map and **G**
-  opens Map2. Empty maps contain connection slots, not fabricated servers.
+* Choose **MAP 1** or **MAP 2** in the lobby header. That choice becomes the current
+  lobby and persists across restarts; Map 2 is the default. The terminal has one
+  **LOBBY** button. F2, Ctrl+Esc, double-Esc, and disconnect return to the selected
+  layout. Empty maps contain connection slots, not fabricated servers.
 
 Opening a session from either map eases the camera toward it with exponential
 zoom. Returning pulls back onto the same session. Explicit disconnects use a

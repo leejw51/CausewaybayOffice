@@ -91,9 +91,9 @@ function History:draw()
     G.text(lines[1] or "", x + 14, yy + 1, i == self.sel and "yellow" or "white")
   end
   if #self.results == 0 then
-    G.ui("No history. Recording is in Settings.", x + 12, y + 58, "dgray")
+    UI.label("No history. Recording is in Settings.", x + 12, y + 58, w - 24, "dgray")
   end
-  G.ui("Local search; Tab: search / complete / next", x + 12, y + h - 38, "cyan")
+  UI.label("Tab: search / complete / next", x + 12, y + h - 38, w - 24, "cyan")
   UI.hints(
     { { "Enter", "review/copy" }, { "↑↓", "select" }, { "Esc", "close" } },
     x + 12,

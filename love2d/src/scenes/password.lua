@@ -49,7 +49,7 @@ function Pw:draw()
   local a = self.alpha or 1
   local w = math.min(W, D.vw - 16)
   local x, y = UI.frame(self.params.title or "PASSWORD", w, H, D.vw, D.vh, a, "icon_key")
-  G.ui(self.params.prompt or "password for this host", x + 12, y + 28, "gray", a)
+  UI.label(self.params.prompt or "password for this host", x + 12, y + 28, w - 24, "gray", a)
   self.field:draw(x + 12, y + 40, w - 24, self.t, 0)
   UI.hints({ { "Enter", "connect" }, { "Esc", "cancel" } }, x + 12, y + H - 20, w - 24)
 end

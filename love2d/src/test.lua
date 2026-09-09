@@ -1106,7 +1106,10 @@ function M.run(App)
     local fl = Map.fit(510, 366, false)
     check(
       "map landscape covers the view (16:9 wider than the content)",
-      fl.mapW >= 510 and fl.mapH >= fl.viewH and fl.viewH == 366 - fl.infoH and fl.infoH >= 64
+      fl.mapW >= 510
+        and fl.mapH >= fl.viewH
+        and fl.viewH == 366 - fl.infoH - fl.viewY
+        and fl.infoH >= 64
     )
     local fp = Map.fit(770, 1370, true)
     check(
@@ -1114,7 +1117,7 @@ function M.run(App)
       fp.mapW == 770
         and fp.mapH == math.ceil(770 * 9 / 16)
         and fp.mapH < fp.viewH
-        and fp.infoY == fp.viewH
+        and fp.infoY == fp.viewY + fp.viewH
         and fp.infoH == 112
     )
     do
@@ -1459,7 +1462,8 @@ function M.run(App)
     end
     -- Empty stage opens the real connection form and pins its new favorite.
     App.overlays = {}
-    sc:activate(4)
+    local slotX, slotY = sc:toScreen(sc:nodeMapPos(4))
+    sc:mousepressed(slotX, slotY, 1)
     local form = App.overlays[#App.overlays]
     check("empty map stage opens connection form", form and form.name == "connect")
     form.fields[1].value, form.fields[3].value = "new-stage.example", "map-user"
@@ -2134,6 +2138,8 @@ function M.run(App)
       token and token.literal == "my project's folder" and token.last == #line - 1
     )
   end
+
+  require("src.test_lobby_ui").run(App, check)
 
   if fails == 0 then
     print("OK " .. n .. " tests")

@@ -19,6 +19,7 @@ local MG = require("src.mapgraph")
 local Map = {}
 Map.__index = Map
 
+local HEADER_H = 30
 local INFO_H = 80 -- landscape info panel
 local INFO_H_PORTRAIT = 96
 local NODE = 28
@@ -49,8 +50,7 @@ local HINTS = {
   { "Del", "forget" },
   { "[ ]", "page" },
   { "^N", "new" },
-  { "G", "map2" },
-  { "Esc", "lobby" },
+  { "G", "Map 2" },
 }
 local STATE_COL = { none = "gray", connecting = "amber", online = "lgreen", error = "alarm" }
 local AMBER = { 0.96, 0.62, 0.16 }
@@ -231,31 +231,31 @@ function Map.fit(vw, vh, portrait)
   local W, H = 16, 9
   if portrait then
     -- same map, fitted: width-bound normally, height-bound on a short window
-    local viewH = math.max(60, vh - INFO_H_PORTRAIT - 16)
+    local viewH = math.max(60, vh - HEADER_H - INFO_H_PORTRAIT - 16)
     local k = math.min(vw / W, viewH / H)
     return {
       mapW = math.ceil(W * k),
       mapH = math.ceil(H * k),
       viewX = 0,
-      viewY = 0,
+      viewY = HEADER_H,
       viewW = vw,
       viewH = viewH,
-      infoY = viewH,
-      infoH = vh - viewH,
+      infoY = HEADER_H + viewH,
+      infoH = vh - HEADER_H - viewH,
       portrait = true,
     }
   end
-  local viewH = vh - INFO_H
+  local viewH = vh - HEADER_H - INFO_H
   local k = math.max(vw / W, viewH / H)
   local mapW, mapH = math.ceil(W * k), math.ceil(H * k)
   return {
     mapW = mapW,
     mapH = mapH,
     viewX = 0,
-    viewY = 0,
+    viewY = HEADER_H,
     viewW = vw,
     viewH = viewH,
-    infoY = viewH,
+    infoY = HEADER_H + viewH,
     infoH = INFO_H,
     portrait = false,
   }
@@ -453,6 +453,13 @@ end
 -- Connecting ---------------------------------------------------------------------
 
 -- Empty stages are real connection slots, never synthetic servers.
+function Map:newConnection()
+  if not self:hostAt(self.sel) then
+    return self:activate(self.sel)
+  end
+  self.app.push("connect", { fromTerminal = true })
+end
+
 function Map:activate(slot)
   if self:hostAt(slot) then
     return self:startWalk(slot)
@@ -736,7 +743,7 @@ function Map:keypressed(key, m)
   elseif key == "g" then
     return app.switch("map2")
   elseif chord == "new" or key == "n" then
-    return app.push("connect")
+    return self:newConnection()
   elseif chord == "rename" or key == "r" then
     return self:renameSelected()
   elseif chord == "quit" then
@@ -800,7 +807,7 @@ function Map:mousemoved(mx, my)
 end
 
 function Map:mousepressed(mx, my, b)
-  if my >= 34 and my < self.L.viewH and (b == 2 or b == 3) then
+  if my >= HEADER_H and my < self.L.infoY and (b == 2 or b == 3) then
     self.drag = { x = mx, y = my, button = b }
     return
   end
@@ -814,7 +821,7 @@ function Map:mousepressed(mx, my, b)
       return
     end
   end
-  if my < 34 or my >= self.L.viewH then
+  if my < HEADER_H or my >= self.L.infoY then
     return
   end
   local slot = self:nodeAt(mx, my)
@@ -1053,48 +1060,44 @@ function Map:drawLabel(slot, pop)
   local state, rec = self:stageState(host)
   local key = app.sessions.hostKey(host)
   local err = self.errors[key] or (state == "error" and rec and app.core.error(rec.id)) or nil
-  local w = math.max(G.textWidth(name), G.uiWidth(line), err and math.min(200, G.uiWidth(err)) or 0)
-    + 20
-  local h = 40 + (err and 10 or 0)
+  local pad = 14
   local thumb = (self.hover == slot) and rec and app.view(rec.id).canvas or nil
-  if thumb then
-    h = h + 66
-    w = math.max(w, 180)
-  end
-  w = math.min(w, self.L.viewW - 8)
-  local x = math.floor(math.max(4, math.min(sx - w / 2, self.L.viewW - w - 4)))
+  local w = math.min(
+    self.L.viewW - 16,
+    math.min(360, math.max(180, G.textWidth(name) + pad * 2, G.uiWidth(line) + pad * 2))
+  )
+  local contentW = w - pad * 2
+  local h = pad * 2 + 16 + 6 + 8 + (err and 16 or 0) + (thumb and 70 or 0)
+  local x = math.floor(math.max(8, math.min(sx - w / 2, self.L.viewW - w - 8)))
   local y = math.floor(sy - NODE / 2 - 12 - h)
-  if y < 26 then
-    -- would collide with the header: hang it under the node instead
-    y = math.floor(sy + NODE / 2 + 4)
+  if y < 60 then
+    y = math.floor(sy + NODE / 2 + 8)
   end
-  love.graphics.push()
+  y = math.max(60, math.min(y, self.L.infoY - h - 8))
+  self.labelBounds = { x = x, y = y, w = w, h = h, padding = pad }
+  love.graphics.push("all")
   love.graphics.translate(x + w / 2, y + h)
   love.graphics.scale(pop, pop)
   love.graphics.translate(-w / 2, -h)
   G.frame(0, 0, w, h, 1)
-  G.text(name, 10, 6, "white")
-  G.ui(line, 10, 24, state == "error" and "alarm" or "cyan")
-  local yy = 34
+  UI.clip(pad, pad, contentW, h - pad * 2)
+  G.text(UI.fit(name, contentW, true), pad, pad, "white")
+  UI.label(line, pad, pad + 22, contentW, state == "error" and "alarm" or "cyan")
+  local yy = pad + 38
   if err then
-    local e = err
-    while G.uiWidth(e .. "…") > w - 20 and #e > 1 do
-      e = e:sub(1, -2)
-    end
-    G.ui(e .. (e == err and "" or "…"), 10, yy, "alarm")
-    yy = yy + 10
+    UI.label(err, pad, yy, contentW, "alarm")
+    yy = yy + 16
   end
   if thumb then
     local pw, ph = thumb:getDimensions()
-    local tw, th = w - 20, 60
+    local tw, th = contentW, 60
     local k = math.min(tw / pw, th / ph)
-    love.graphics.setColor(0.02, 0.03, 0.08, 1)
-    love.graphics.rectangle("fill", 10, yy + 2, tw, th)
+    G.panel(pad, yy, tw, th, "black", "dblue")
     love.graphics.setColor(1, 1, 1, 0.9)
     love.graphics.draw(
       thumb,
-      10 + math.floor((tw - pw * k) / 2),
-      yy + 2 + math.floor((th - ph * k) / 2),
+      pad + math.floor((tw - pw * k) / 2),
+      yy + math.floor((th - ph * k) / 2),
       0,
       k,
       k
@@ -1125,9 +1128,28 @@ function Map:drawInfo()
   local state, rec = self:stageState(host)
   local col = STATE_COL[state]
   local rowsEnd = y + 34
-  G.ui("STAGE " .. self.sel .. "  page " .. (self.page + 1) .. "/" .. self.pages, 8, y + 6, "rust")
+  local bw = require("src.lobby_views").disconnect(
+    app,
+    self.buttons,
+    rec,
+    vw - 8,
+    y + 4,
+    self:selectionFocus()
+  )
+  UI.label(
+    "STAGE " .. self.sel .. "  page " .. (self.page + 1) .. "/" .. self.pages,
+    8,
+    y + 6,
+    vw - bw - 24,
+    "rust"
+  )
   local name = self:stageName(host)
-  G.text(name, 8, y + 16, "white")
+  G.text(
+    UI.fit(name, L.portrait and vw - bw - 24 or math.floor(vw * 0.5) - 16, true),
+    8,
+    y + 16,
+    "white"
+  )
   if host then
     local key = app.sessions.hostKey(host)
     local keyTxt = (host.keypath and host.keypath ~= "") and host.keypath or "agent / ~/.ssh/id_*"
@@ -1150,12 +1172,10 @@ function Map:drawInfo()
     end
     if L.portrait then
       -- stacked, state first
-      G.ui(state:upper(), vw - 8 - G.uiWidth(state:upper()), y + 6, col)
-      local ry = y + 34
+      G.ui(state:upper(), 8, y + 34, col)
+      local ry = y + 46
       for i, txt in ipairs(rows) do
-        while G.uiWidth(txt) > vw - 16 and #txt > 1 do
-          txt = txt:sub(1, -2)
-        end
+        txt = UI.fit(txt, vw - 16)
         G.ui(txt, 8, ry, cols[i])
         ry = ry + 10
       end
@@ -1164,7 +1184,7 @@ function Map:drawInfo()
       -- two columns
       local cx = math.floor(vw * 0.5)
       local ry = y + 6
-      G.ui(state:upper(), cx, ry, col)
+      UI.label(state:upper(), cx, ry, vw - bw - 24 - cx, col)
       ry = ry + 10
       for i, txt in ipairs(rows) do
         local k = i - 1
@@ -1172,9 +1192,10 @@ function Map:drawInfo()
         local yy = (k % 2 == 0) and (y + 34 + math.floor(k / 2) * 10)
           or (ry + math.floor(k / 2) * 10)
         local maxW = (k % 2 == 0) and (cx - 16) or (vw - cx - 8)
-        while G.uiWidth(txt) > maxW and #txt > 1 do
-          txt = txt:sub(1, -2)
+        if yy < y + 24 and colx == cx then
+          maxW = math.min(maxW, vw - bw - 24 - cx)
         end
+        txt = UI.fit(txt, maxW)
         G.ui(txt, colx, yy, cols[i])
         rowsEnd = math.max(rowsEnd, yy + 10)
       end
@@ -1215,28 +1236,25 @@ end
 function Map:drawHeader()
   local G = self.app.G
   local vw = self.app.D.vw
-  local title = "WORLD MAP"
+  G.panel(0, 0, vw, 30, "navy", "dblue")
+  local title = "LOBBY"
   G.ui(title, 9, 7, "black", 0.6)
   G.ui(title, 8, 6, "rust")
-  local sub =
-    string.format("%d sessions / %d favorites", #self.app.sessions.list, #self.app.sessions.hosts)
-  G.ui(sub, 8, 16, "gray")
-  G.ui("Drag / Shift+arrows pan   Home center", 8, 27, "yellow")
-  local bw = G.uiWidth("MAP2") + 12
-  local bx = vw - bw - 8
-  G.frame(bx, 15, bw, 16, 1)
-  G.ui("MAP2", bx + 6, 19, "yellow")
+  local newW = G.uiWidth("+ NEW") + 14
+  local nx = vw - newW - 8
+  G.panel(nx, 6, newW, 20, "ink", "cyan")
+  G.ui("+ NEW", nx + 7, 12, "yellow")
   self.buttons[#self.buttons + 1] = {
-    x = bx,
-    y = 15,
-    w = bw,
-    h = 16,
+    id = "new",
+    x = nx,
+    y = 6,
+    w = newW,
+    h = 20,
     fn = function()
-      self.app.switch("map2")
+      self:newConnection()
     end,
   }
-  local back = "Esc / M lobby"
-  G.ui(back, vw - G.uiWidth(back) - 8 - (self.app.core.mock and 84 or 0), 6, "yellow")
+  require("src.lobby_views").draw(self.app, self.buttons, "map", nx - 5, 6)
 end
 
 -- The map page as it lies on screen, clipped to the view (virtual px).
@@ -1255,7 +1273,7 @@ function Map:draw()
   local app = self.app
   local D = app.D
   local L = self.L
-  love.graphics.setScissor(D.ox * D.s, D.oy * D.s, L.viewW * D.s, L.viewH * D.s)
+  love.graphics.setScissor(D.ox * D.s, (D.oy + L.viewY) * D.s, L.viewW * D.s, L.viewH * D.s)
   -- letterbox: black outside the map page, then everything on the map
   -- (backdrop, clouds, paths, stages, hero, label) clipped to the page
   self.app.G.color("black")
@@ -1266,14 +1284,14 @@ function Map:draw()
   self:drawPaths()
   self:drawNodes()
   self:drawHero()
-  love.graphics.setScissor(D.ox * D.s, D.oy * D.s, L.viewW * D.s, L.viewH * D.s)
+  love.graphics.setScissor(D.ox * D.s, (D.oy + L.viewY) * D.s, L.viewW * D.s, L.viewH * D.s)
   -- the stage label is HUD: it may hang over the letterbox bar
   local label = self.hover or self.sel
   if label then
     self:drawLabel(label, label == self.sel and self.labelPop.s or 1)
   end
-  self:drawHeader()
   love.graphics.setScissor()
+  self:drawHeader()
   self:drawInfo()
 end
 

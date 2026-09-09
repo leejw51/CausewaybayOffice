@@ -77,9 +77,9 @@ end
 function G.loadFonts()
   G.fontUI = tryFont(G.ASSETS .. "fonts/PressStart2P.ttf", 8, "mono")
   G.fontTerm = tryFont(G.ASSETS .. "fonts/unifont.otf", 16, "mono")
-  -- Let headings show CJK too (same 16px line box, drawn at half scale).
+  -- UI fallback glyphs must share the 8px label height.
   pcall(function()
-    G.fontUI:setFallbacks(G.fontTerm)
+    G.fontUI:setFallbacks(tryFont(G.ASSETS .. "fonts/unifont.otf", 8, "mono"))
   end)
   love.graphics.setFont(G.fontTerm)
 end
@@ -600,11 +600,11 @@ end
 function G.frame(x, y, w, h, a, tint)
   local n = G.nineSlice()
   x, y, w, h = math.floor(x), math.floor(y), math.floor(w), math.floor(h)
-  if not n.ok then
+  if not n.ok or h < 24 then
     G.panel(x, y, w, h, "navy", "rust", a)
     return
   end
-  local c = n.c
+  local c = math.min(n.c, 8, math.floor(w / 4), math.floor(h / 4))
   local t = tint or 1
   love.graphics.setColor(t, t, t, a or 1)
   local xs = { x, x + c, x + w - c, x + w }

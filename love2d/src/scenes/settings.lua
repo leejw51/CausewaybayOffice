@@ -326,20 +326,23 @@ function Settings:draw()
     if row.kind == "key" then
       G.drawIcon("icon_key", x + 132, ry - 3, 16)
     end
-    G.ui(row.label, x + 16, ry + 2, selected and "neon_pink" or "gray")
+    UI.label(
+      row.label,
+      x + 16,
+      ry + 2,
+      row.kind == "key" and 112 or 128,
+      selected and "neon_pink" or "gray"
+    )
     local vt = self:valueText(row)
     -- clip the value to the frame (portrait frames are narrower than a key + its source)
-    local room = W - 150 - 12
-    while G.uiWidth(vt) > room and #vt > 1 do
-      vt = vt:sub(1, -2)
-    end
+    vt = UI.fit(vt, W - 166 - 28)
     local col = "white"
     if row.kind == "bool" then
       col = self.cfg[row.id] and "lgreen" or "dgray"
     elseif row.kind == "key" then
       col = vt:find("not set") and "dgray" or "cyan"
     end
-    G.ui(vt, x + 150, ry + 2, col)
+    G.ui(vt, x + 166, ry + 2, col)
     if
       selected
       and (
@@ -351,7 +354,7 @@ function Settings:draw()
         or row.kind == "orientation"
       )
     then
-      G.ui("<", x + 140, ry + 2, "yellow")
+      G.ui("<", x + 152, ry + 2, "yellow")
       G.ui(">", x + W - 18, ry + 2, "yellow")
     end
   end
@@ -366,12 +369,7 @@ function Settings:draw()
     local e = self.editing
     local ex, ey = x + 20, y + math.floor(H / 2) - 20
     G.panel(ex, ey, W - 40, 44, "navy", "cyan")
-    G.ui(
-      "edit " .. e.row.label .. (e.row.kind == "key" and "  (paste with Cmd+V, Enter saves)" or ""),
-      ex + 6,
-      ey + 4,
-      "cyan"
-    )
+    UI.label("Edit " .. e.row.label, ex + 6, ey + 4, W - 52, "cyan")
     e.field:draw(ex + 6, ey + 16, W - 52, self.t, 0)
   end
   UI.hints({
@@ -380,7 +378,7 @@ function Settings:draw()
     { "Enter", "edit" },
     { "Del", "clear" },
     { "Esc", "save+close" },
-  }, x + 6, y + H - 14, W)
+  }, x + 12, y + H - 18, W - 24)
 end
 
 return Settings

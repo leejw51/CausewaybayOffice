@@ -1,4 +1,4 @@
--- A second map: searchable, filtered cards for every live session and saved
+-- Map 2 lobby: searchable, filtered cards for every live session and saved
 -- favorite. Favorites are added by connecting, never by a separate add step.
 local UI = require("src.ui")
 local Keys = require("src.keys")
@@ -132,7 +132,17 @@ function Map2:layout()
   self.cols = math.max(1, math.floor((D.vw - 12) / 192))
   self.cardW = math.floor((D.vw - 16 - (self.cols - 1) * 8) / self.cols)
   self.cardH = 88
-  self.top, self.bottom = 92, D.vh - 24
+  self.filterButtons = {}
+  local x, y = 10, 76
+  for i, label in ipairs(Map2.FILTERS) do
+    local w = self.app.G.uiWidth(label) + 12
+    if x + w > D.vw - 10 then
+      x, y = 10, y + 21
+    end
+    self.filterButtons[i] = { x = x, y = y, w = w }
+    x = x + w + 4
+  end
+  self.top, self.bottom = y + 25, D.vh - 24
   self.visibleRows = math.max(1, math.floor((self.bottom - self.top) / (self.cardH + 8)))
   self.maxScroll = math.max(0, math.ceil(#self.shown / self.cols) - self.visibleRows)
   self.scroll = math.max(0, math.min(self.scroll, self.maxScroll))
@@ -242,14 +252,28 @@ function Map2:open(index)
 end
 function Map2:keypressed(key, m)
   local chord = Keys.appChord(key, m)
-  if chord == "lobby" or key == "escape" then
-    self.app.switch("lobby")
+  if key == "escape" then
+    self.field.value = ""
+    self:setFilter(1)
+  elseif chord == "lobby" then
+    return
   elseif chord == "new" then
     self:newConnection()
   elseif chord == "settings" then
     self.app.push("settings")
   elseif chord == "help" then
     self.app.push("help")
+  elseif chord == "search" then
+    self.app.push("search")
+  elseif chord == "rename" then
+    local e = self.shown[self.sel]
+    if e then
+      self.app.push(
+        "rename",
+        e.rec and { id = e.rec.id }
+          or { hostKey = self.app.sessions.hostKey(e.host), initial = e.name }
+      )
+    end
   elseif chord == "quit" then
     love.event.quit()
   elseif key == "tab" then
@@ -326,12 +350,13 @@ function Map2:draw()
   self:layout()
   self.buttons, self.cards = {}, {}
   app.drawSkyline(self.t, 0.15, D.vh)
-  G.panel(0, 0, D.vw, 88, "navy", "rust")
-  G.ui("MAP2 / SESSIONS", 10, 8, "rust")
-  G.ui(
+  G.panel(0, 0, D.vw, self.top - 4, "navy", "rust")
+  G.ui("LOBBY", 10, 8, "rust")
+  UI.label(
     string.format("%d sessions  %d favorites", #app.sessions.list, #app.sessions.hosts),
     10,
-    21,
+    34,
+    D.vw - 20,
     "gray"
   )
   local x = D.vw - 8
@@ -346,35 +371,29 @@ function Map2:draw()
   button("+ NEW", function()
     self:newConnection()
   end)
-  button("MAP", function()
-    app.switch("map")
-  end)
-  button("LOBBY", function()
-    app.switch("lobby")
-  end)
-  self.field:draw(10, 36, D.vw - 20, self.t, 0)
-  local fx = 10
+  require("src.lobby_views").draw(app, self.buttons, "map2", x, 7)
+  self.field:draw(10, 48, D.vw - 20, self.t, 0)
   for i, label in ipairs(Map2.FILTERS) do
-    local w = G.uiWidth(label) + 12
+    local b = self.filterButtons[i]
+    local fx, fy, w = b.x, b.y, b.w
     G.panel(
       fx,
-      64,
+      fy,
       w,
       17,
       self.filter == i and "ink" or "navy",
       self.filter == i and "cyan" or "dblue"
     )
-    G.ui(label, fx + 6, 69, self.filter == i and "yellow" or "gray")
+    G.ui(label, fx + 6, fy + 5, self.filter == i and "yellow" or "gray")
     self.buttons[#self.buttons + 1] = {
       x = fx,
-      y = 64,
+      y = fy,
       w = w,
       h = 17,
       fn = function()
         self:setFilter(i)
       end,
     }
-    fx = fx + w + 4
   end
   local first = math.floor(self.scroll) * self.cols + 1
   local last = math.min(#self.shown, first + self.visibleRows * self.cols - 1)
@@ -402,11 +421,12 @@ function Map2:draw()
     self.cards[#self.cards + 1] = { x = cx, y = cy, w = self.cardW, h = self.cardH, index = i }
   end
   if #self.shown == 0 then
-    G.ui(
+    UI.wrapped(
       #self.entries == 0 and "No servers. + NEW connects and saves a favorite."
         or "No matches. Change the search or filter.",
       12,
       self.top + 18,
+      D.vw - 24,
       "gray"
     )
   end
@@ -433,14 +453,23 @@ function Map2:draw()
     end
     love.graphics.setLineWidth(1)
   end
-  G.panel(0, D.vh - 21, D.vw, 21, "navy", "dblue")
+  G.panel(0, D.vh - 24, D.vw, 24, "navy", "dblue")
+  local entry = self.shown[self.sel]
+  local bw = require("src.lobby_views").disconnect(
+    app,
+    self.buttons,
+    entry and entry.rec,
+    D.vw - 8,
+    D.vh - 22,
+    self:selectionFocus()
+  )
   UI.hints({
     { "Enter", "open" },
     { "Tab", "filter" },
     { "↑↓", "select" },
     { "wheel", "scroll" },
     { "Del", "disconnect" },
-    { "Esc", "lobby" },
-  }, 10, D.vh - 14, D.vw - 20)
+    { "Esc", "clear filters" },
+  }, 10, D.vh - 16, D.vw - bw - 28)
 end
 return Map2

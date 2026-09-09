@@ -181,7 +181,6 @@ function Connect:draw()
   for i, f in ipairs(self.fields) do
     f:draw(x + 12, y + 28 + (i - 1) * 24, W - 24, self.t, 72)
   end
-  G.drawIcon("icon_key", x + W - 30, y + 28 + 3 * 24 + 2, 16, a)
   local ry = y + 28 + #self.fields * 24 + 6
   G.ui("FAVORITE SERVERS", x + 12, ry - 2, "dgray")
   ry = ry + 8
@@ -203,7 +202,7 @@ function Connect:draw()
   end
   if self.error then
     local k = math.max(0, 1 - self.errorT / 4)
-    G.ui("! " .. self.error, x + 12, y + H - 32, "alarm", 0.4 + 0.6 * k)
+    UI.label("! " .. self.error, x + 12, y + H - 32, W - 24, "alarm", 0.4 + 0.6 * k)
   end
   UI.hints(
     { { "Enter", "connect" }, { "Tab", "next field" }, { "^Space", "reuse" }, { "Esc", "cancel" } },

@@ -24,8 +24,7 @@ local TAB_H = 16
 local CWD_H = 16
 local TAB_BUTTONS = {
   { "< LOBBY", true },
-  { "MAP", false },
-  { "MAP2", false },
+  { "DISCONNECT", false },
   { "AI CLOSE", false },
   { "UPLOAD", false },
   { "DOWNLOAD", false },
@@ -251,12 +250,6 @@ function Term:openMenu(mx, my)
         end,
       },
       {
-        "World map",
-        function()
-          self:toMap()
-        end,
-      },
-      {
         "Rename  (^R)",
         function()
           app.push("rename", { id = self.id })
@@ -326,27 +319,34 @@ end
 -- Tab strip rows: the session name always gets printed at the top. When the
 -- nav buttons leave no room beside them (portrait, narrow windows) the name,
 -- host and index move to a second title row instead of being cut to "…".
+function Term.toolbar(D, G)
+  local buttons, x, row = {}, 4, 0
+  local limit = D.vw - 56
+  for _, b in ipairs(TAB_BUTTONS) do
+    if b[1] ~= "AI CLOSE" or D.vw >= 440 then
+      local w = G.uiWidth(b[1]) + (b[2] and 26 or 12)
+      if x + w > limit and x > 4 then
+        x, row = 4, row + 1
+      end
+      buttons[b[1]] = { x = x, y = row * TAB_H, w = w }
+      x = x + w + 4
+    end
+  end
+  return buttons, row + 1, x
+end
+
 function Term.titleRows(D, rec, G)
   if not rec or not G then
     return 1
   end
-  local buttons = 4 + 4 + 12 -- gaps + led
-  for _, b in ipairs(TAB_BUTTONS) do
-    local visible = not ((b[1] == "MAP" or b[1] == "MAP2") and D.vw < 550)
-      and not (b[1] == "AI CLOSE" and D.vw < 440)
-    if visible then
-      buttons = buttons + G.uiWidth(b[1]) + (b[2] and 26 or 12) + 4
-    end
-  end
-  local icons = 8 + 20 * 2 + 8
-  local room = D.vw - buttons - icons
-  local idx = "[00/00]"
+  local _, rows, x = Term.toolbar(D, G)
+  local room = D.vw - x - 68
   local need = G.uiWidth(rec.name or "")
     + 10
     + G.uiWidth((rec.user or "") .. "@" .. (rec.host or ""))
     + 10
-    + G.uiWidth(idx)
-  return need > room and 2 or 1
+    + G.uiWidth("[00/00]")
+  return rows + (need > room and 1 or 0)
 end
 
 -- Height of the chrome above the grid (tab strip, plus the title row).
@@ -1027,12 +1027,16 @@ function Term:drawTabStrip(rec)
   G.color("rust")
   love.graphics.rectangle("fill", 0, top - 1, vw, 1)
   local Lobby = require("src.scenes.lobby")
-  -- "◀ LOBBY" / "MAP" buttons (card_frame style, lift 2px on hover)
+  -- Return to the selected lobby layout (lift 2px on hover).
+  local positions, toolbarRows, endX = Term.toolbar(D, G)
   local x = 4
+  local rowY = (toolbarRows - 1) * TAB_H
   local function button(id, label, icon, fn)
-    local w = G.uiWidth(label) + (icon and 26 or 12)
+    local pos = positions[id == "ai" and "AI CLOSE" or label]
+    x = pos.x
+    local w = pos.w
     local lift = (self.hover[id] and self.hover[id].lift) or 0
-    local by = 1 - math.floor(lift + 0.5)
+    local by = pos.y + 1 - math.floor(lift + 0.5)
     G.frame(x, by, w, TAB_H - 2, 1)
     if id == "download" and self.downloadPicking then
       G.panel(x, by, w, TAB_H - 2, "dblue", "cyan")
@@ -1041,20 +1045,15 @@ function Term:drawTabStrip(rec)
       G.drawIcon(icon, x + 5, by + 1, 12)
     end
     G.ui(label, x + (icon and 20 or 6), by + 4, "yellow")
-    self.buttons[#self.buttons + 1] = { id = id, x = x, y = 0, w = w, h = TAB_H, fn = fn }
+    self.buttons[#self.buttons + 1] = { id = id, x = x, y = pos.y, w = w, h = TAB_H, fn = fn }
     x = x + w + 4
   end
   button("lobby", "< LOBBY", "icon_session", function()
     self:toLobby()
   end)
-  if vw >= 550 then
-    button("map", "MAP", nil, function()
-      self:toMap()
-    end)
-    button("map2", "MAP2", nil, function()
-      app.switch("map2")
-    end)
-  end
+  button("disconnect", "DISCONNECT", nil, function()
+    app.disconnectSession(app.sessions.get(self.id))
+  end)
   if vw >= 440 then
     button("ai", self.aiOpen and "AI CLOSE" or "AI CHAT", nil, function()
       self:toggleAI()
@@ -1066,46 +1065,34 @@ function Term:drawTabStrip(rec)
   button("download", "DOWNLOAD", nil, function()
     self:toggleDownloadPick()
   end)
-  x = x + 4
-  G.drawFrame(G.ledStrip(8), Lobby.ledFrame(G, ST, rec.state, self.t), x, 4, 1, 1)
+  x = endX + 4
+  G.drawFrame(G.ledStrip(8), Lobby.ledFrame(G, ST, rec.state, self.t), x, rowY + 4, 1, 1)
   x = x + 12
   -- right: icons (ai, search) + hint; the middle wraps/truncates to fit
-  local ix = vw - 8 - 20 * 2 - (app.core.mock and 84 or 0)
+  local ix = vw - 8 - 20 * 2
   local limit = ix - 8
   local function fit(txt, col, gap)
     local room = limit - x
     if room < G.uiWidth("…") + 8 then
       return false
     end
-    local t = txt
-    while G.uiWidth(t .. "…") > room and #t > 1 do
-      t = t:sub(1, -2)
-    end
-    if t ~= txt then
-      t = t .. "…"
-    end
-    G.ui(t, x, 4, col)
+    local t = UI.fit(txt, room)
+    G.ui(t, x, rowY + 4, col)
     x = x + G.uiWidth(t) + (gap or 10)
     return t == txt
   end
   local hostTxt = rec.user .. "@" .. rec.host
   local idx = string.format("[%d/%d]", app.sessions.index(self.id) or 0, app.sessions.count())
-  if rows == 2 then
+  if rows > toolbarRows then
     -- title row: the whole name, then host and index as room allows
     local saveX, saveLimit = x, limit
     x, limit = 8, vw - 8
     love.graphics.setColor(0.08, 0.10, 0.26, 1)
-    love.graphics.rectangle("fill", 0, TAB_H, vw, TAB_H - 1)
+    love.graphics.rectangle("fill", 0, toolbarRows * TAB_H, vw, TAB_H - 1)
     local function fitRow(txt, col, gap)
       local room = limit - x
-      local t = txt
-      while G.uiWidth(t .. "…") > room and #t > 1 do
-        t = t:sub(1, -2)
-      end
-      if t ~= txt then
-        t = t .. "…"
-      end
-      G.ui(t, x, TAB_H + 4, col)
+      local t = UI.fit(txt, room)
+      G.ui(t, x, toolbarRows * TAB_H + 4, col)
       x = x + G.uiWidth(t) + (gap or 10)
       return t == txt
     end
@@ -1129,7 +1116,7 @@ function Term:drawTabStrip(rec)
   local hint = panelOpen and "Esc close"
     or (self.suggestion and "Right accept" or "^Space complete")
   local hx = ix0 - G.uiWidth(hint) - 12
-  if hx > x + 4 then
+  if toolbarRows == 1 and hx > x + 4 then
     G.ui(hint, hx, 4, panelOpen and "yellow" or "dgray")
   end
   self:drawFolderBar(top)
@@ -1159,41 +1146,37 @@ function Term:drawStatus(rec)
   elseif ka > 0 then
     kaTxt = string.format("%2ds keepalive", ka)
   end
-  G.ui(kaTxt, x, y + 5, rec.pulse > 0 and "lgreen" or "gray")
-  x = x + G.uiWidth(kaTxt) + 12
+  local idleTxt
   if info and info.last_activity_ms > 0 then
     local idle = math.max(0, (app.core.nowMs() - info.last_activity_ms) / 1000)
-    local idleTxt = string.format("idle %ds", math.floor(idle))
+    idleTxt = string.format("idle %ds", math.floor(idle))
+  end
+  local grid = string.format("UTF-8  %dx%d  %dx  ", self.cols or 0, self.rows or 0, self.zoom or 1)
+  local desired = x
+    + G.uiWidth(kaTxt)
+    + 12
+    + G.uiWidth(stTxt)
+    + 12
+    + (idleTxt and G.uiWidth(idleTxt) + 12 or 0)
+  local right = grid .. BACK_HINT
+  if vw - G.uiWidth(right) - 8 <= desired then
+    right = BACK_HINT
+  end
+  local rightX = vw - G.uiWidth(right) - 8
+  local stateW = G.uiWidth(stTxt)
+  local kaRoom = rightX - x - stateW - 36
+  local shown = UI.fit(kaTxt, kaRoom)
+  G.ui(shown, x, y + 5, rec.pulse > 0 and "lgreen" or "gray")
+  x = x + G.uiWidth(shown) + 12
+  if idleTxt and x + G.uiWidth(idleTxt) + stateW + 36 < rightX then
     G.ui(idleTxt, x, y + 5, "gray")
     x = x + G.uiWidth(idleTxt) + 12
   end
   G.ui(stTxt, x, y + 5, ledCol)
-  x = x + G.uiWidth(stTxt) + 12
-  -- the way back is always visible on the right; the grid info only when it fits
-  local back = BACK_HINT
-  local grid = string.format("UTF-8  %dx%d  %dx  ", self.cols or 0, self.rows or 0, self.zoom or 1)
-  local right = grid .. back
-  if vw - G.uiWidth(right) - 8 <= x then
-    right = back
-  end
-  local rightX = vw - G.uiWidth(right) - 8
+  x = x + stateW + 12
   self.statusRight, self.statusRightX, self.statusLeftEnd = right, rightX, x
   if rec.state == ST.ERROR then
-    -- the error message gets the room between the state and the right block
-    local full = app.core.error(self.id)
-    local err = full
-    local room = rightX - 12 - x
-    while G.uiWidth(err .. "…") > room and #err > 1 do
-      err = err:sub(1, -2)
-    end
-    if room > G.uiWidth("…") then
-      G.ui(err .. (err == full and "" or "…"), x, y + 5, "alarm")
-    end
-  end
-  if rightX <= x then
-    -- no room beside the state: draw the way back over a dark tab instead
-    love.graphics.setColor(0.10, 0.12, 0.31, 1)
-    love.graphics.rectangle("fill", rightX - 4, y + 1, vw - rightX + 4, STATUS_H - 1)
+    UI.label(app.core.error(self.id), x, y + 5, rightX - x - 12, "alarm")
   end
   G.ui(right, rightX, y + 5, "gray")
   self.completionBox, self.transferBox = nil, nil
@@ -1332,6 +1315,7 @@ function Term:draw()
       msg = "SESSION CLOSED  (Ctrl+Esc: lobby)"
       col = "gray"
     end
+    msg = UI.fit(msg, math.max(0, self.gw - 40))
     local w = G.uiWidth(msg) + 24
     local cx = math.floor(self.ox + (self.gw - w) / 2)
     local cy = math.floor(self.oy + self.gh / 2) - 12

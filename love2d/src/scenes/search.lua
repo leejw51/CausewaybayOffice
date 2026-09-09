@@ -133,13 +133,8 @@ function Search:draw()
       end
     end
     G.led(x + 10, ry + 7, led, true, self.t + i)
-    local utf8 = require("utf8")
-    while G.uiWidth(host) > W * 0.4 and #host > 0 do
-      host = host:sub(1, (utf8.offset(host, -1) or 1) - 1)
-    end
-    while G.textWidth(name) > W - G.uiWidth(host) - 40 and #name > 0 do
-      name = name:sub(1, (utf8.offset(name, -1) or 1) - 1)
-    end
+    host = UI.fit(host, W * 0.4)
+    name = UI.fit(name, W - G.uiWidth(host) - 40, true)
     G.text(name, x + 18, ry + 1, selected and "neon_pink" or "white")
     G.ui(host, x + W - G.uiWidth(host) - 10, ry + 5, "cyan")
     ry = ry + 18

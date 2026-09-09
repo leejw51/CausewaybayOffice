@@ -19,7 +19,9 @@ function Menu.new(app, params)
   for _, it in ipairs(s.items) do
     s.w = math.max(s.w, app.G.uiWidth(it[1]) + 28)
   end
-  s.h = 26 + #s.items * ROW_H + 8
+  s.w = math.min(math.max(s.w, app.G.uiWidth(s.title) + 24), app.D.vw - 8)
+  s.h = math.min(26 + #s.items * ROW_H + 8, app.D.vh - 8)
+  s.visible = math.max(1, math.floor((s.h - 34) / ROW_H))
   local D = app.D
   s.x = math.floor(math.max(4, math.min((params.x or (D.vw - s.w) / 2), D.vw - s.w - 4)))
   s.y = math.floor(math.max(4, math.min((params.y or (D.vh - s.h) / 2), D.vh - s.h - 4)))
@@ -54,16 +56,16 @@ function Menu:keypressed(key)
 end
 
 function Menu:mousemoved(mx, my)
-  for i = 1, #self.items do
-    if UI.inside(mx, my, self.x, self.y + 22 + (i - 1) * ROW_H, self.w, ROW_H) then
+  for i = self:first(), math.min(#self.items, self:first() + self.visible - 1) do
+    if UI.inside(mx, my, self.x, self.y + 22 + (i - self:first()) * ROW_H, self.w, ROW_H) then
       self.sel = i
     end
   end
 end
 
 function Menu:mousepressed(mx, my, b)
-  for i = 1, #self.items do
-    if UI.inside(mx, my, self.x, self.y + 22 + (i - 1) * ROW_H, self.w, ROW_H) then
+  for i = self:first(), math.min(#self.items, self:first() + self.visible - 1) do
+    if UI.inside(mx, my, self.x, self.y + 22 + (i - self:first()) * ROW_H, self.w, ROW_H) then
       self:pick(i)
       return
     end
@@ -73,17 +75,22 @@ function Menu:mousepressed(mx, my, b)
   end
 end
 
+function Menu:first()
+  return math.max(1, self.sel - self.visible + 1)
+end
+
 function Menu:draw()
   local G = self.app.G
   local a = self.alpha or 1
   G.frame(self.x, self.y, self.w, self.h, a)
-  G.ui(self.title, self.x + 10, self.y + 8, "rust", a)
-  for i, it in ipairs(self.items) do
-    local ry = self.y + 22 + (i - 1) * ROW_H
+  UI.label(self.title, self.x + 10, self.y + 8, self.w - 20, "rust", a)
+  for i = self:first(), math.min(#self.items, self:first() + self.visible - 1) do
+    local it = self.items[i]
+    local ry = self.y + 22 + (i - self:first()) * ROW_H
     if i == self.sel then
       G.panel(self.x + 6, ry, self.w - 12, ROW_H - 1, "ink", "neon_pink", a)
     end
-    G.ui(it[1], self.x + 12, ry + 3, i == self.sel and "neon_pink" or "white", a)
+    UI.label(it[1], self.x + 12, ry + 3, self.w - 24, i == self.sel and "neon_pink" or "white", a)
   end
 end
 

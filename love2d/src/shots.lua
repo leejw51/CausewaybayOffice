@@ -158,6 +158,10 @@ function M.run(App, phase)
   if require("src.shots_p3").run(App, phase, H) then
     return
   end
+  if phase == "polish" then
+    require("src.shots_polish").run(App, H)
+    return
+  end
 
   if phase == "aichat" then
     local connected
@@ -854,12 +858,15 @@ function M.run(App, phase)
     end)
     at(1, function()
       check(
-        "disconnect reveals grid with other session intact",
-        App.sceneName == "map2"
+        "disconnect reveals selected lobby with other session intact",
+        App.sceneName == App.lobbyView()
           and App.iris == nil
           and App.sessions.get(second.id) == nil
           and App.core.state(connected.id) == App.core.ST.CONNECTED
       )
+      App.switch("map2")
+    end)
+    at(1.2, function()
       App.scene.field.value = ""
       App.scene:refresh()
       App.scene:disconnectMenu(1)

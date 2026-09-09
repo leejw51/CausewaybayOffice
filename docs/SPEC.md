@@ -220,3 +220,15 @@ DOWNLOAD (or Ctrl+Shift+D) now arms a one-shot picking mode: the next plain clic
 on a filename starts the transfer. Active button styling, hover underline/hand
 cursor, and a filename/status hint identify the target. Blank clicks keep the
 mode active; Esc or another DOWNLOAD click cancels without sending shell input.
+
+## Lobby layouts and text containment (2026-09-09)
+
+The lobby is Map 1 (world map) or Map 2 (searchable session grid), selected by
+the shared header controls and persisted as `lobbyView`. Map 2 is the default.
+Boot, terminal return shortcuts, and disconnect all resolve to the current
+lobby. There is no third lobby destination. Map 2 wraps filter controls with
+the window; Escape clears its search and filters.
+
+Text fields reserve cursor space and preserve the parent's clipping rectangle.
+Single-line labels truncate at Unicode boundaries with an ellipsis; Help wraps
+its columns and scrolls. Dialogs size their content to their actual frame.

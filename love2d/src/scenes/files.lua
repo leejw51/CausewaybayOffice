@@ -292,10 +292,10 @@ function Files:draw()
     self.rec and (self.rec.user .. "@" .. self.rec.host) or "Session closed",
     x + 12,
     y + 29,
-    w - 112,
+    w - 120,
     "cyan"
   )
-  button(d.hidden and "HIDE DOTS" or "SHOW DOTS", x + w - 92, y + 25, 80, function()
+  button(d.hidden and "HIDE DOTS" or "SHOW DOTS", x + w - 100, y + 25, 88, function()
     d.hidden = not d.hidden
     self:filterEntries()
   end)

@@ -5,6 +5,36 @@ local utf8 = require("utf8")
 local G = require("src.gfx")
 
 local UI = {}
+
+-- Measure with the font used to draw, preserve UTF-8, and reserve the ellipsis.
+function UI.fit(text, width, body)
+  text = tostring(text or ""):gsub("[%z\1-\31\127]", " ")
+  local measure = body and G.textWidth or G.uiWidth
+  width = math.max(0, width)
+  if measure(text) <= width then
+    return text
+  end
+  local suffix = "…"
+  if measure(suffix) > width then
+    return ""
+  end
+  while #text > 0 and measure(text .. suffix) > width do
+    text = text:sub(1, (utf8.offset(text, -1) or 1) - 1)
+  end
+  return text .. suffix
+end
+
+function UI.label(text, x, y, w, color, alpha)
+  G.ui(UI.fit(text, w), x, y, color, alpha)
+end
+
+-- Scissors use screen pixels, even when overlays are scaled or sliding.
+-- Call inside push("all") / pop() to preserve the caller's clipping region.
+function UI.clip(x, y, w, h)
+  local x0, y0 = love.graphics.transformPoint(x, y)
+  local x1, y1 = love.graphics.transformPoint(x + w, y + h)
+  love.graphics.intersectScissor(x0, y0, math.max(0, x1 - x0), math.max(0, y1 - y0))
+end
 local fields = setmetatable({}, { __mode = "k" })
 local function core()
   return require("src.core")
@@ -172,7 +202,7 @@ end
 -- Draw label at (x, y) and the box to the right (w wide). h = 20.
 function Field:draw(x, y, w, t, labelW)
   labelW = labelW or 72
-  G.ui(self.label, x, y + 6, self.focused and "yellow" or "gray")
+  UI.label(self.label, x, y + 6, math.max(0, labelW - 8), self.focused and "yellow" or "gray")
   local bx = x + labelW
   local bw = w - labelW
   G.panel(bx, y, bw, 20, self.focused and "ink" or "navy", self.focused and "cyan" or "dgray")
@@ -183,12 +213,13 @@ function Field:draw(x, y, w, t, labelW)
     col = "dgray"
   end
   -- clip to box: show the tail
-  local maxW = bw - 8
+  local maxW = math.max(0, bw - 8 - (self.focused and 8 or 0))
   while G.textWidth(shown) > maxW and #shown > 0 do
     local off = utf8.offset(shown, 2) or 2
     shown = shown:sub(off)
   end
-  love.graphics.setScissor()
+  love.graphics.push("all")
+  UI.clip(bx + 2, y + 2, bw - 4, 16)
   if self.focused and self.selectAll then
     G.panel(bx + 3, y + 2, G.textWidth(shown) + 2, 16, "dblue", "dblue")
   end
@@ -206,6 +237,7 @@ function Field:draw(x, y, w, t, labelW)
     G.color("rust")
     love.graphics.rectangle("fill", cx, y + 3, 8, 14)
   end
+  love.graphics.pop()
 end
 
 -- Footer with key hints: { {"Enter", "open"}, ... }
@@ -240,11 +272,12 @@ function UI.frame(title, w, h, vw, vh, alpha, icon)
     G.drawIcon(icon, x + 10, y + 6, 16, alpha)
     tx = tx + 18
   end
+  title = UI.fit(title, x + w - 12 - tx)
   G.ui(title, tx + 1, y + 11, "black", 0.6 * alpha)
   G.ui(title, tx, y + 10, "rust", alpha)
   G.color("rust", 0.5 * alpha)
   love.graphics.rectangle("fill", x + 12, y + 22, w - 24, 1)
-  return x, y
+  return x, y, w, h
 end
 
 -- Wrapped text with fontTerm, returns height drawn.

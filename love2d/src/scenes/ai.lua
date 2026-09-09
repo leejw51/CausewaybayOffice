@@ -327,13 +327,11 @@ function AI:draw(x, y, w, h, t)
   end
   local narrow = w < 220
   local labelX, labelY = narrow and (x + pad) or (mx + 4), narrow and (y + 48) or (y + pad + 6)
-  G.ui(self.provider:upper(), labelX, labelY, "yellow")
+  UI.label(self.provider:upper(), labelX, labelY, x + w - labelX - pad, "yellow")
   local model = Config.model(self.provider)
   local modelX = narrow and (x + pad) or (mx + 4)
   local modelY = narrow and (y + 59) or (y + pad + 17)
-  while G.uiWidth(model) > x + w - modelX - 12 and #model > 1 do
-    model = model:sub(1, -2)
-  end
+  model = UI.fit(model, x + w - modelX - 12)
   G.ui(model, modelX, modelY, "gray")
   local headerH = narrow and 74 or 50
   G.color("dblue", 0.6)
@@ -344,7 +342,8 @@ function AI:draw(x, y, w, h, t)
   local inputH = 24
   local ch = math.max(0, h - (cy - y) - inputH - 26)
   self.viewH = ch
-  love.graphics.setScissor((D.ox + cx) * D.s, (D.oy + cy) * D.s, cw * D.s, ch * D.s)
+  love.graphics.push("all")
+  UI.clip(cx, cy, cw, ch)
   local yy = cy - math.floor(self.scroll)
   local total = 0
   local function bubble(role, text, provider)
@@ -396,7 +395,7 @@ function AI:draw(x, y, w, h, t)
     bubble("assistant", "! " .. self.error, self.provider)
   end
   self.contentH = total
-  love.graphics.setScissor()
+  love.graphics.pop()
 
   -- input + hints
   local iy = y + h - inputH - 20

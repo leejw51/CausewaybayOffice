@@ -159,15 +159,33 @@ local function loadScene(name, params)
   return inst
 end
 
+function App.lobbyView()
+  return Config.get().lobbyView == "map" and "map" or "map2"
+end
+
+local function rememberLobby(name)
+  if (name == "map" or name == "map2") and Config.get().lobbyView ~= name then
+    Config.get().lobbyView = name
+    Config.save()
+  end
+end
+
 -- Switch base scene with a fade. Returns false if a transition is running.
 function App.switch(name, params)
-  if App.iris then
+  if App.iris or fx.transitioning then
     return false
+  end
+  if name == "lobby" then
+    name = App.lobbyView()
+  end
+  if name == App.sceneName and (name == "map" or name == "map2") then
+    return true
   end
   require("src.ui").flush()
   if App.scene == nil then
     App.scene = loadScene(name, params)
     App.sceneName = name
+    rememberLobby(name)
     if App.scene.enter then
       App.scene:enter()
     end
@@ -191,6 +209,7 @@ function App.switch(name, params)
     App.overlays = {}
     App.scene = loadScene(name, params)
     App.sceneName = name
+    rememberLobby(name)
     if App.scene.enter then
       App.scene:enter()
     end
@@ -237,7 +256,11 @@ function App.updateIris(dt)
         App.scene:leave()
       end
       App.overlays = {}
-      App.scene, App.sceneName = loadScene("map2"), "map2"
+      local name = App.lobbyView()
+      App.scene, App.sceneName = loadScene(name), name
+      if App.scene.enter then
+        App.scene:enter()
+      end
     elseif App.scene.refresh then
       App.scene:refresh()
     end
@@ -446,23 +469,25 @@ function App.draw()
   end
   fx.drawFlash(D.fw, D.fh)
   fx.drawFade(D.fw, D.fh)
-  if Core.mock then
-    local label = "MOCK CORE"
-    local w = G.uiWidth(label) + 8
-    G.panel(D.ox + D.vw - w - 4, D.oy + 4, w, 12, "dred", "lred", 0.9)
-    G.ui(label, D.ox + D.vw - w, D.oy + 6, "white")
-  end
+
   if App.showFps then
     G.ui(string.format("%d fps", App.fps), D.ox + 4, D.oy + D.vh - 10, "gray")
   end
   if App.toastV.a > 0.01 then
-    local w = G.uiWidth(App.toastV.text) + 24
+    local label = require("src.ui").fit(App.toastV.text, D.vw - 40)
+    local w = G.uiWidth(label) + 24
     local tx = D.ox + math.floor((D.vw - w) / 2)
     local ty = D.oy + D.vh - 48
     G.frame(tx, ty, w, 22, App.toastV.a)
-    G.ui(App.toastV.text, tx + 12, ty + 7, "yellow", App.toastV.a)
+    G.ui(label, tx + 12, ty + 7, "yellow", App.toastV.a)
   end
   App.drawDisplayControls()
+  if Core.mock then
+    local label = "MOCK CORE"
+    local w = G.uiWidth(label) + 8
+    G.panel(D.fw - w - 4, 5, w, 12, "dred", "lred", 0.9)
+    G.ui(label, D.fw - w, 7, "white")
+  end
   love.graphics.pop()
   love.graphics.setColor(1, 1, 1, 1)
 end

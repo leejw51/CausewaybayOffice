@@ -75,12 +75,13 @@ function Rename:draw()
   local G, D = app.G, app.D
   local a = self.alpha or 1
   local title = self.hostKey and "RENAME STAGE" or "RENAME SESSION"
-  local x, y = UI.frame(title, W, H, D.vw, D.vh, a, "icon_session")
+  local x, y, W, H = UI.frame(title, W, H, D.vw, D.vh, a, "icon_session")
   self.field:draw(x + 12, y + 28, W - 24, self.t, 0)
   local n = utf8.len(self.field.value) or 0
-  G.ui(string.format("%d/32", n), x + W - 44, y + 52, n > 32 and "alarm" or "dgray")
+  local count = string.format("%d/32", n)
+  G.ui(count, x + W - 12 - G.uiWidth(count), y + 52, n > 32 and "alarm" or "dgray")
   if self.error then
-    G.ui("! " .. self.error, x + 12, y + 52, "alarm")
+    UI.label("! " .. self.error, x + 12, y + 52, W - 68, "alarm")
   end
   UI.hints({ { "Enter", "save" }, { "Esc", "cancel" } }, x + 12, y + H - 20, W - 24)
 end

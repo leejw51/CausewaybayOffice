@@ -38,7 +38,7 @@ function Paste:draw()
   local D, G = app.D, app.G
   local w, h = math.min(420, D.vw - 8), math.min(270, D.vh - 8)
   local x, y = UI.frame("REVIEW TERMINAL INPUT", w, h, D.vw, D.vh, self.alpha)
-  G.ui("Sending newlines may run commands.", x + 12, y + 30, "amber")
+  UI.label("Newlines may run commands.", x + 12, y + 30, w - 24, "amber")
   local _, lines = G.fontTerm:getWrap(self.text, w - 24)
   local visible = math.max(1, math.floor((h - 80) / 16))
   self.maxScroll = math.max(0, (#lines - visible) * 16)

@@ -28,6 +28,7 @@ local function defaults()
     keyClicks = false,
     sound = true,
     seenTermHint = false,
+    lobbyView = "map2", -- map (Map 1) | map2 (Map 2)
     display = "window", -- window | fullscreen
     orientation = "auto", -- auto | landscape | portrait
     orientationFor = "", -- window shape a forced orientation was chosen for
@@ -62,6 +63,9 @@ function C.load()
     end
   end
   local d = C.data
+  if d.lobbyView ~= "map" then
+    d.lobbyView = "map2"
+  end
   if not C.DEFAULT_MODELS[d.defaultProvider] then
     d.defaultProvider = "openai"
   end
