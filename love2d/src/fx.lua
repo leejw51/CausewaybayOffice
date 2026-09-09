@@ -709,7 +709,13 @@ end
 local function retroPasses(canvas, st, r)
   local dt = math.min(0.1, math.max(0, fx.time - st.lastTime))
   st.lastTime = fx.time
+  -- The caller's scissor (the bezel window) must not follow us into the
+  -- canvases: LÖVE keeps it across setCanvas with the y axis flipped, and on
+  -- macOS the flipped rectangle stuck to the screen after pop(), clipping the
+  -- status bar away. Drop it here and re-apply it by hand afterwards.
+  local sx, sy, sw, sh = love.graphics.getScissor()
   love.graphics.push("all")
+  love.graphics.setScissor()
   love.graphics.origin()
   love.graphics.setColor(1, 1, 1, 1)
   love.graphics.setBlendMode("replace", "premultiplied")
@@ -740,6 +746,10 @@ local function retroPasses(canvas, st, r)
     love.graphics.draw(st.bloomB, 0, 0)
   end
   love.graphics.pop()
+  love.graphics.setScissor()
+  if sx then
+    love.graphics.setScissor(sx, sy, sw, sh)
+  end
   return st.burnA, st.bloomA
 end
 

@@ -1227,6 +1227,9 @@ function Term:drawStatus(rec)
     end
   end
   local kaRoom = leftEdge - x - stateW - 36
+  if G.uiWidth(kaTxt) > kaRoom then
+    kaTxt = kaTxt:match("^%s*(%d+s)") or "ka" -- "15s" beats "15s keepali…"
+  end
   local shown = UI.fit(kaTxt, kaRoom)
   G.ui(shown, x, y + 5, rec.pulse > 0 and "lgreen" or "gray")
   x = x + G.uiWidth(shown) + 12
