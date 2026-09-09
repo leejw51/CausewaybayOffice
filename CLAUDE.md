@@ -48,6 +48,7 @@ make start       # core + love love2d      make start-mock  # no core
 make test        # cargo test + in-engine suite
 make check       # lint + test — run before every commit
 make cdef        # after any change to cbo.h
+make package     # portable bundle into dist/    make app  # macOS .app (signed if a Developer ID is present)
 ```
 
 LÖVE is not on PATH: the Makefile uses `~/Applications/love.app/Contents/MacOS/love`

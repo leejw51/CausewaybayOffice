@@ -5,6 +5,9 @@ rust/target/
 love2d/build/
 *.love
 
+# make package output
+dist/
+
 # Test scratch (the in-engine suite writes its save dir here).
 .tmp_save_test
 love2d/.tmp_save_test

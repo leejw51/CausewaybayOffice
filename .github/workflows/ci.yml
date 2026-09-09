@@ -1,0 +1,175 @@
+# CI — what `make check` runs, split so a failure names itself.
+#
+# The Rust core and the LÖVE UI are two halves over one contract
+# (rust/include/cbo.h), so they get separate jobs: the core is formatted,
+# linted and tested with cargo; the UI is formatted with stylua, byte-compiled
+# with LuaJIT and driven through the C ABI headlessly (rust/examples/
+# ffi_smoke.lua), which is as far as a runner without a window server can go.
+# The in-engine suite (`make test-love`) and the SSH/UI integration runs need a
+# display and a local sshd, so they stay on a laptop.
+#
+# Packaging is exercised on every push: the portable bundle on Linux, where the
+# staged core is loaded from ./dist with no checkout beside it, and the macOS
+# .app, unsigned, uploaded for a week so a change to the bundle can be opened.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only. Nothing here publishes anything; that is the release workflow.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pinned to the version development happens on, so clippy and rustfmt can
+  # never disagree with a local `make check`.
+  RUST_TOOLCHAIN: 1.97.1
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Cheap, and it is the number a release tag will later be compared against.
+      - run: make version
+
+  rust:
+    name: Rust (fmt, clippy, tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+
+      - run: cargo fmt --check
+        working-directory: rust
+      - run: make lint-rust
+      # The ssh tests skip themselves when nothing answers on 127.0.0.1:22 and
+      # the live provider tests skip without CBO_LIVE=1, so this is the
+      # deterministic subset: VT100, SSE parsing, names, search, the sqlite
+      # store and the C ABI.
+      - run: cargo test --release
+        working-directory: rust
+
+  lua:
+    name: Lua (stylua, LuaJIT, C ABI)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+
+      # LÖVE embeds LuaJIT, so LuaJIT is what the UI runs on — and the only
+      # Lua with the `ffi` module the loader needs.
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends luajit
+
+      - name: Install stylua
+        uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --check love2d
+
+      - run: make lint-lua LUAJIT=luajit
+
+      # The cdef is generated from the header and both are committed; a header
+      # edited without `make cdef` is the contract silently drifting.
+      - name: cbo_cdef.lua is in sync with cbo.h
+        run: |
+          make cdef
+          git diff --exit-code -- love2d/src/cbo_cdef.lua
+
+      # Builds the release core, then loads it through the app's own cdef.
+      - run: make test-ffi LUAJIT=luajit
+
+  package:
+    name: Package (Linux, portable)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends luajit zip unzip
+
+      # Stages ./dist and loads the staged core from there, checkout-free.
+      - run: make package-smoke LUAJIT=luajit
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CausewaybayOffice-linux-portable
+          path: dist/CausewaybayOffice
+          if-no-files-found: error
+          retention-days: 7
+
+  app:
+    name: Package (macOS .app, unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+
+      - name: Install LuaJIT
+        run: brew install luajit
+
+      # No ~/Applications/love.app on a runner: `make app` downloads the
+      # official 11.5 zip. No signing secrets on CI either, so the bundle is
+      # ad-hoc signed; the release workflow does the real one. The smoke test
+      # that starts the bundle is skipped — a runner has no window server —
+      # and `verify-archive` plus `package-smoke` cover the same faults.
+      - run: make package-smoke LUAJIT=luajit
+      - run: make app SKIP_SMOKE=1 LUAJIT=luajit
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CausewaybayOffice-macos-unsigned
+          path: love2d/build/CausewaybayOffice-macos.zip
+          if-no-files-found: error
+          retention-days: 7

@@ -27,7 +27,11 @@ package.path = love2d .. "/?.lua;" .. love2d .. "/src/?.lua;" .. package.path
 local cbo = require("cbo_cdef")
 local lib = cbo.load()
 print("loaded " .. cbo.path)
-if bundle then assert(cbo.path == bundle .. "/libcbo_core.dylib", "must load the bundled core") end
+if bundle then
+  local ext = ffi.os == "OSX" and "dylib" or (ffi.os == "Windows" and "dll" or "so")
+  local name = (ffi.os == "Windows" and "" or "lib") .. "cbo_core." .. ext
+  assert(cbo.path == bundle .. "/" .. name, "must load the bundled core, not " .. cbo.path)
+end
 
 local function s(p) return p ~= nil and ffi.string(p) or "<null>" end
 

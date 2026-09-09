@@ -342,8 +342,17 @@ tools/kitty_test.py   kitty graphics protocol: show test images, probe, self-tes
 | `make test-live` | explicit provider/embedding API checks (may incur charges) |
 | `make smoke` | `cargo run --release --example smoke` |
 | `make art` | regenerate assets |
-| `make love` / `make app` | `.love` archive / unsigned macOS `.app` with LÖVE and the dylib inside |
-| `make clean` | remove build output |
+| `make love` | `.love` archive in `love2d/build/`, checked to carry every module |
+| `make package` / `package-smoke` | portable bundle in `dist/` (`.love` + core library + launcher, needs LÖVE 11.5 installed); `-smoke` loads the staged core headlessly |
+| `make app` | macOS `.app` with LÖVE and the dylib inside, icon from the key art, signed with a Developer ID when one is in the keychain (ad-hoc otherwise) |
+| `make notarize` / `gatekeeper` | notarise + staple the `.app` (`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`); assess it the way Finder does |
+| `make clean` | remove build output and `dist/` |
+
+CI (`.github/workflows/ci.yml`) runs the Rust and Lua checks, the cdef sync
+check and both package shapes on every push and pull request. Pushing a tag
+`vX.Y.Z` on `main` that matches `VERSION` runs `release.yml`, which builds the
+signed and notarised macOS app (when the signing secrets are set) and the
+portable bundles, and attaches them to a GitHub release with checksums.
 
 Change `cbo.h` and `cbo_cdef.lua` together (via `make cdef`) or not at all.
 
