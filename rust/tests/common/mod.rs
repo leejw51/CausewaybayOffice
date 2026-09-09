@@ -161,11 +161,32 @@ pub fn wait_state(id: i32, want: i32, timeout: Duration) -> Result<(), String> {
     }
 }
 
+/// Startup files may take longer on a busy machine. Wait for the shell's
+/// directory report and visible prompt instead of assuming a 400 ms delay.
+pub fn wait_shell_prompt(id: i32) {
+    let start = Instant::now();
+    loop {
+        if cbo_term_generation(id) > 0 && !from_c(cbo_term_cwd(id)).is_empty() && cursor(id).0 > 0 {
+            return;
+        }
+        assert_eq!(
+            cbo_session_state(id),
+            ST_CONNECTED,
+            "shell closed before prompt: {}",
+            session_error(id)
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "shell prompt did not arrive within 10 seconds"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 pub fn connect_local(cols: u16, rows: u16) -> i32 {
     let id = open_local(cols, rows);
     wait_state(id, ST_CONNECTED, Duration::from_secs(10)).expect("CONNECTED");
-    // Let the shell print its prompt before we type.
-    std::thread::sleep(Duration::from_millis(400));
+    wait_shell_prompt(id);
     id
 }
 

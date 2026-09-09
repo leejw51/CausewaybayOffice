@@ -1061,7 +1061,7 @@ function M.run(App)
       D.vw = 770
       check("wide terminal keeps name beside the buttons", Term.titleRows(D, rec, G) == 1)
       check("no record: single tab row", Term.titleRows(D, nil, G) == 1)
-      local top = 32
+      local top = 32 + Term.CWD_H
       local _, r2 = Term.availFor(D, 0, top)
       local _, r1 = Term.availFor(D, 0)
       check("title row takes its height from the grid", r1 - r2 == 16)
@@ -1548,7 +1548,7 @@ function M.run(App)
     )
     Sessions.update()
     check("Sessions.update() without dt leaves it", math.abs(rec.pulse - 0.6) < 1e-6)
-    -- (D) landscape grids unchanged from phase 2; (B) status bar keeps the way back
+    -- Landscape grids reserve the folder bar; status bar keeps the way back.
     local D = App.D
     local savedW, savedH = D.w, D.h
     App.setBezel(true, true)
@@ -1556,10 +1556,10 @@ function M.run(App)
     D.setOrientation("auto")
     D.resize(1080, 800)
     local c, r = Term.grid(D, false)
-    check("1080x800 grid fits below global toolbar", c == 125 and r == 37, c .. "x" .. r)
+    check("1080x800 grid fits below toolbar and folder bar", c == 125 and r == 35, c .. "x" .. r)
     D.resize(1920, 1080)
     c, r = Term.grid(D, false)
-    check("1920x1080 grid fits below global toolbar", c == 225 and r == 49, c .. "x" .. r)
+    check("1920x1080 grid fits below toolbar and folder bar", c == 225 and r == 46, c .. "x" .. r)
     Core.update(2)
     Sessions.update(0.1)
     local term = Term.new(App, { id = rec.id })
@@ -1823,6 +1823,216 @@ function M.run(App)
     Sessions.saveHosts, Core.sessionsSave, Core.sessionsLoad = saveHosts, saveSnapshot, loadSnapshot
     mock.reset()
     Sessions.list, Sessions.byId, Sessions.hosts = {}, {}, {}
+  end
+
+  do
+    local P = require("src.terminal_files")
+    check(
+      "terminal filename resolves against reported cwd",
+      P.resolve("/srv/work", "report.txt") == "/srv/work/report.txt"
+    )
+    check(
+      "terminal absolute and home paths stay absolute",
+      P.resolve("/srv", "/tmp/a") == "/tmp/a" and P.resolve("/srv", "~/a") == "~/a"
+    )
+    check(
+      "terminal download rejects multiline and URL text",
+      P.resolve("/srv", "a\nb") == nil and P.resolve("/srv", "https://example.com/a") == nil
+    )
+    check(
+      "terminal file links strip compiler line numbers",
+      P.resolve("/srv", "main.rs:12:4") == "/srv/main.rs"
+    )
+    local function token(line, col)
+      local cells, x = {}, 0
+      for _, cp in utf8.codes(line) do
+        local width = Core.utf8Width(utf8.char(cp))
+        cells[x] = { cp = cp, width = width }
+        if width == 2 then
+          cells[x + 1] = { cp = 0, width = 0 }
+        end
+        x = x + width
+      end
+      return P.at({ cells = cells, cols = x, rows = 1 }, col, 0)
+    end
+    check(
+      "terminal file links parse quoted spaces",
+      token("a.txt 'my report.txt' b.txt", 12).name == "my report.txt"
+    )
+    check(
+      "terminal file links parse escaped spaces",
+      token("my\\ report.txt", 4).name == "my report.txt"
+    )
+    check("terminal file links preserve Unicode", token("한글.txt", 2).name == "한글.txt")
+    check("terminal whitespace is not a file link", token("a.txt    b.txt", 7) == nil)
+  end
+
+  do
+    local Sessions = require("src.sessions")
+    local original = Sessions.core
+    local reported, wrote = "/home/test", false
+    Sessions.core = {
+      mock = false,
+      typing = function()
+        return ""
+      end,
+      cwd = function()
+        return reported
+      end,
+      write = function()
+        wrote = true
+      end,
+      kvSet = function()
+        return true
+      end,
+    }
+    local rec = { id = 0, wantCwd = "/srv/project", cwd = "/srv/project", lastGen = 7, quiet = 0.5 }
+    Sessions.trackCwd(rec, 7, 0.5)
+    Sessions.trackCwd(rec, 7, 0.1)
+    check(
+      "queued restore does not overwrite saved cwd with login folder",
+      wrote and rec.cwd == "/srv/project" and rec.restoreGen == 7
+    )
+    reported = "/srv/project"
+    Sessions.trackCwd(rec, 8, 0.1)
+    check(
+      "restore learns only after the new folder report",
+      rec.restoreGen == nil and rec.cwd == "/srv/project"
+    )
+    Sessions.core = original
+  end
+
+  do
+    local Transfer = require("src.scenes.transfer")
+    local rec, request, popped = {}, nil, false
+    local state = { state = "running", done = 12, total = 24 }
+    local app = {
+      time = 5,
+      sessions = {
+        get = function()
+          return rec
+        end,
+      },
+      pop = function()
+        popped = true
+      end,
+      toast = function() end,
+      core = {
+        cwd = function()
+          return "/srv/work"
+        end,
+        filesStart = function(_, req)
+          request = req
+          return true
+        end,
+        filesStatus = function()
+          return state
+        end,
+      },
+    }
+    local sheet =
+      Transfer.new(app, { id = 0, op = "upload", path = "/tmp/my file.txt", auto = true })
+    sheet:update(0.1)
+    check(
+      "terminal drop starts transfer with no extra confirmation",
+      request
+        and request["local"] == "/tmp/my file.txt"
+        and request.remote == "/srv/work/my file.txt"
+        and popped
+    )
+    check(
+      "background transfer retains paths for details and retry",
+      rec.quickTransfer.source == "/tmp/my file.txt"
+        and rec.quickTransfer.destination == "/srv/work/my file.txt"
+    )
+    state = { state = "done", done = 24, total = 24 }
+    sheet:update(0.1)
+    local details = Transfer.new(app, { id = 0, details = true })
+    check(
+      "completed transfer reopens with exact paths",
+      details.done
+        and details.source == "/tmp/my file.txt"
+        and details.field.value == "/srv/work/my file.txt"
+    )
+    rec = {}
+    app.core.cwd = function()
+      return ""
+    end
+    request = nil
+    sheet = Transfer.new(app, { id = 0, op = "upload", path = "/tmp/my file.txt", auto = true })
+    sheet:update(0.1)
+    check(
+      "unknown terminal folder asks for destination instead of guessing",
+      request == nil and not sheet.auto and sheet.field.value == ""
+    )
+    sheet = Transfer.new(app, { id = 0, op = "download", path = "report.txt", auto = true })
+    sheet:update(0.1)
+    check(
+      "unknown folder never guesses a download source",
+      request == nil and sheet.remote and sheet.source == ""
+    )
+  end
+
+  do
+    local Term = require("src.scenes.terminal")
+    local pushed, writes = nil, 0
+    local app = {
+      D = { vh = 200 },
+      audio = { play = function() end },
+      toast = function() end,
+      core = {
+        write = function()
+          writes = writes + 1
+        end,
+      },
+      push = function(name, params)
+        pushed = { name = name, params = params }
+      end,
+    }
+    local sc = Term.new(app, { id = 7 })
+    local tv = { cols = 14, rows = 1, cells = {}, sel = {} }
+    for i = 1, 14 do
+      tv.cells[i - 1] = { cp = ("report.txt    "):byte(i), width = 1 }
+    end
+    function tv:selectedText()
+      return self.sel and "stale.txt" or nil
+    end
+    sc.view = function()
+      return tv
+    end
+    sc.cellAt = function(_, x)
+      return math.floor(x / 8), 0
+    end
+    sc.ox, sc.oy, sc.gw, sc.gh, sc.top = 0, 16, 112, 16, 16
+    sc:toggleDownloadPick()
+    check(
+      "DOWNLOAD arms picking without opening a dialog",
+      sc.downloadPicking and not pushed and tv.sel == nil
+    )
+    sc:mousepressed(100, 20, 1)
+    check(
+      "download picking ignores whitespace and stays active",
+      sc.downloadPicking and not pushed and not sc.dragging
+    )
+    sc:mousepressed(12, 20, 1)
+    check(
+      "plain filename click starts the automatic download",
+      pushed
+        and pushed.name == "transfer"
+        and pushed.params.path == "report.txt"
+        and pushed.params.auto
+        and not sc.downloadPicking
+    )
+    pushed = nil
+    sc:toggleDownloadPick()
+    sc:keypressed("escape", { ctrl = false, shift = false })
+    check(
+      "Esc cancels download picking without reaching the shell",
+      not sc.downloadPicking and writes == 0 and not pushed
+    )
+    sc:toggleDownloadPick()
+    sc:toggleDownloadPick()
+    check("DOWNLOAD toggles picking off again", not sc.downloadPicking)
   end
 
   if fails == 0 then

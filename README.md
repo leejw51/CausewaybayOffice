@@ -177,10 +177,51 @@ settings and AI prompts. Current names/settings stay visible when editing them.
 Passwords and API keys are excluded from learned input. Field history stays local,
 separate from optional terminal recording and OpenAI indexing.
 
-The remote working directory is remembered too. When the shell reports it
-(OSC 7, or the `user@host: ~/dir` title that Debian and Ubuntu bash set), the
-last directory is saved per session and per host, and the next connection
-types a `cd` back to it as soon as the prompt appears.
+The remote working directory is remembered per session and per host. Bash,
+zsh and fish receive session-only OSC 7 prompt integration, including custom
+prompts; your startup files are not edited. The next connection returns to the
+saved directory after the first prompt. Starting to type cancels automatic `cd`.
+Other shells can report OSC 7 or a `user@host: ~/dir` title. Missing directories
+produce the shell's normal error.
+
+The terminal shows the current folder beneath the toolbar, updating as you change
+directories. Click the path or COPY to copy the full folder path.
+
+### Upload and download
+
+Use **UPLOAD** / **DOWNLOAD** in the terminal toolbar, or **Ctrl+Shift+U** /
+**Ctrl+Shift+D**. Upload opens the Mac file chooser; dropping a file onto the terminal
+also works. The remote destination uses the shell's current directory and the
+original filename automatically.
+
+**Click DOWNLOAD, then click a filename in the terminal output** to download it.
+The button stays highlighted while picking; hover underlines the filename. Esc or
+clicking DOWNLOAD again cancels. Ctrl+Shift+D enables the same picking mode.
+You can also Cmd/Ctrl-click a filename, or right-click it and choose Download. The app parses quoted/escaped filenames and compiler `file:line:column`
+references, resolves relative paths against the shell's reported directory, and
+fills in `~/Downloads/<filename>`. For unquoted names containing spaces, select the
+whole name first. Detected files transfer immediately, with progress in the terminal status bar
+and no extra confirmation. Click that status to cancel, inspect the destination,
+retry with a different filename, or show a completed download in Finder. Right-click
+and choose Recent transfer to reopen the details later. If a path cannot be inferred,
+a compact sheet lets you enter it. Downloads use SFTP directly; no shell copy
+commands are inserted. The shell directory applies to relative names from the current
+folder; older output or listings of another folder may need an absolute path.
+
+The optional **Ctrl+Shift+F** browser provides local and remote file lists. They sit side by side in wide windows and stack in portrait. Double-click
+a folder or press Enter to open it; edit a path and press Enter/GO to jump there.
+**SHELL DIR** opens the terminal's current remote directory. **SHOW DOTS** toggles
+hidden files; Tab switches lists, arrows select, and the wheel scrolls.
+
+Select a local file and click **UPLOAD**, or select a remote file and click
+**DOWNLOAD**. Review the editable destination filename, then start. Progress and Cancel are shown while transferring;
+you can close Files and continue typing, then reopen it to see the result.
+Existing destination files are kept: choose a different filename for another copy.
+Incomplete files are removed after a failed or cancelled transfer when possible.
+
+Transfers use SFTP on a separate SSH connection with the terminal's credentials
+and host-key checks. The server must support SFTP. This version transfers individual
+regular files; folders can be browsed but are not copied recursively.
 
 Under `~/.causewaybayoffice/` (or `CBO_HOME`):
 

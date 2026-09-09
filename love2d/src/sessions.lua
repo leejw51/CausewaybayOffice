@@ -35,7 +35,7 @@ end
 -- history where HISTCONTROL ignores it; single quotes carry any character
 -- but a quote, which is spliced in.
 function S.cdCommand(path)
-  if type(path) ~= "string" or path == "" then
+  if type(path) ~= "string" or path == "" or path:find("[%z\1-\31\127]") then
     return nil
   end
   if path == "~" then
@@ -546,12 +546,26 @@ end
 -- cwd changed.
 function S.trackCwd(rec, gen, dt)
   if rec.wantCwd then
+    -- A real cwd report establishes that shell startup reached its prompt.
+    -- Never append an automatic command to something the user is typing.
+    if S.core.typing(rec.id) ~= "" then
+      rec.wantCwd, rec.cwdArmed = nil, true
+      return false
+    end
+    if S.core.cwd(rec.id) == "" and not S.core.mock then
+      return false
+    end
     if gen ~= rec.lastGen then
       rec.lastGen, rec.quiet = gen, 0
     elseif gen > 0 then
       rec.quiet = rec.quiet + dt
       if rec.quiet >= S.CWD_SETTLE then
-        S.core.write(rec.id, S.cdCommand(rec.wantCwd))
+        local cmd = S.cdCommand(rec.wantCwd)
+        if cmd then
+          rec.cwdBeforeRestore = S.core.cwd(rec.id)
+          rec.restoreGen = gen
+          S.core.write(rec.id, cmd)
+        end
         rec.wantCwd, rec.cwdArmed = nil, true
       end
     end
@@ -561,6 +575,14 @@ function S.trackCwd(rec, gen, dt)
     return false
   end
   local cwd = S.core.cwd(rec.id)
+  if rec.restoreGen then
+    -- A queued cd has not necessarily reached the shell yet. Do not save
+    -- the old login directory while waiting for the next prompt report.
+    if gen == rec.restoreGen or cwd == rec.cwdBeforeRestore then
+      return false
+    end
+    rec.restoreGen = nil
+  end
   if cwd == "" or cwd == rec.cwd then
     return false
   end

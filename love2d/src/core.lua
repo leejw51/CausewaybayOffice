@@ -222,6 +222,25 @@ function Core.cwd(id)
   return str(lib.cbo_term_cwd(id))
 end
 
+function Core.filesStart(id, request)
+  if Core.mock then
+    return false, "File transfers require a real SSH session"
+  end
+  local ok = lib.cbo_files_start(id, require("src.json").encode(request)) == 0
+  return ok, not ok and Core.lastError() or nil
+end
+function Core.filesStatus(id)
+  if Core.mock then
+    return {}
+  end
+  return require("src.json").decode(str(lib.cbo_files_status(id))) or {}
+end
+function Core.filesCancel(id)
+  if not Core.mock then
+    lib.cbo_files_cancel(id)
+  end
+end
+
 function Core.takeBell(id)
   return tonumber(lib.cbo_term_take_bell(id))
 end

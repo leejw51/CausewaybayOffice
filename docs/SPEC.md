@@ -195,3 +195,28 @@ pointer) and paints them into the terminal canvas: z < 0 between the cell
 backgrounds and the glyphs, z >= 0 over the glyphs, so the CRT shader applies.
 Per session the core keeps at most 128 MB of image data (oldest unplaced
 images evicted first) and refuses images over 64 MB.
+
+
+## Terminal files and cwd (2026-09-09)
+
+Bash, zsh and fish get temporary per-session OSC 7 integration when their SSH
+shell starts; user startup files are not modified. Directory restoration waits
+for a cwd report and quiet prompt, cancels if the user types, and does not save
+the old login directory while the restoration command is queued.
+
+The terminal toolbar exposes Upload and Download. Local file drops and the Mac
+file chooser infer the remote destination from the current cwd and basename.
+Cmd/Ctrl-click or right-click on a filename in rendered output infers a download;
+selection handles unquoted spaces. Quoted/escaped names and compiler line suffixes
+are parsed as literal paths, never evaluated. A compact transfer sheet defaults
+downloads to Downloads and shows progress/cancel while keeping the terminal visible.
+Ctrl+Shift+F opens the optional two-pane browser. Rust performs bounded async jobs
+on a separate authenticated SFTP connection, preserves existing destinations, and
+attempts to remove incomplete files on error/cancel. Regular files only for now.
+
+The terminal includes a persistent current-folder row below its toolbar. It
+updates from the live shell report and copies the full path when clicked.
+DOWNLOAD (or Ctrl+Shift+D) now arms a one-shot picking mode: the next plain click
+on a filename starts the transfer. Active button styling, hover underline/hand
+cursor, and a filename/status hint identify the target. Blank clicks keep the
+mode active; Esc or another DOWNLOAD click cancels without sending shell input.

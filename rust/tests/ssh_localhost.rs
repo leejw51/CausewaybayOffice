@@ -39,7 +39,7 @@ fn connect_echo_and_close() {
     wait_state(id, ST_CONNECTED, Duration::from_secs(10)).expect("CONNECTED within 10 s");
     let connect_ms = t0.elapsed().as_millis();
     assert_eq!(info(id).state, ST_CONNECTED);
-    std::thread::sleep(Duration::from_millis(400));
+    wait_shell_prompt(id);
     let gen0 = cbo_term_generation(id);
     assert!(gen0 > 0, "prompt must have bumped the generation");
 
@@ -327,7 +327,7 @@ fn close_free_and_slot_reuse() {
     .expect("row");
     assert_eq!(cbo_session_reconnect(c), 0);
     wait_state(c, ST_CONNECTED, Duration::from_secs(10)).expect("reconnected");
-    std::thread::sleep(Duration::from_millis(400));
+    wait_shell_prompt(c);
     let line = run_marked(c, 80, 24, "echo AFTER=1", "AFTER=");
     assert_eq!(line, "AFTER=1");
 

@@ -216,7 +216,7 @@ function M.run(App, phase)
           setMode(1280, 800)
           App.setOrientation("landscape")
           fx.after(0.6, function()
-            check("horizontal AI chat docks beside terminal", ai.rect.x > 0 and ai.rect.y == 16)
+            check("horizontal AI chat docks beside terminal", ai.rect.x > 0 and ai.rect.y == sc.top)
             shot("qa_ai_side")
             fx.after(0.3, function()
               App.setOrientation("portrait")
@@ -301,6 +301,130 @@ function M.run(App, phase)
     return
   end
 
+  if phase == "files" then
+    local rec, panel
+    at(0.5, function()
+      setMode(1280, 900)
+      App.setOrientation("landscape")
+      rec = App.sessions.open({
+        host = "localhost",
+        user = os.getenv("USER") or "dev",
+        name = "files-check",
+      })
+    end)
+    at(3.5, function()
+      App.switch("terminal", { id = rec.id })
+    end)
+    at(0.8, function()
+      check(
+        "terminal has direct UPLOAD and DOWNLOAD buttons",
+        (function()
+          for _, b in ipairs(App.scene.buttons) do
+            if b.id == "download" then
+              return true
+            end
+          end
+        end)()
+      )
+      panel = App.push("files", { id = rec.id })
+    end)
+    at(2, function()
+      check(
+        "local and remote folders loaded",
+        panel.data.panes[1].loaded and panel.data.panes[2].loaded,
+        panel.data.error
+      )
+      shot("qa_files_landscape")
+      local before = App.core.typing(rec.id)
+      panel:keypressed("l", ctrl)
+      panel:textinput("/tmp")
+      check("file browser input stays out of the terminal", App.core.typing(rec.id) == before)
+      panel:keypressed("return", none)
+    end)
+    at(1, function()
+      panel:prepare("upload", "/tmp/example file.txt")
+      check("upload reviews a destination before starting", panel.confirm and not panel.data.active)
+      shot("qa_files_upload")
+    end)
+    at(0.5, function()
+      panel:keypressed("escape", none)
+      setMode(800, 1400)
+      App.setOrientation("portrait")
+    end)
+    at(0.8, function()
+      shot("qa_files_portrait")
+      check(
+        "portrait still has both file lists",
+        panel.data.panes[1].visible > 0 and panel.data.panes[2].visible > 0
+      )
+    end)
+    at(0.5, function()
+      App.pop(panel)
+      setMode(1280, 900)
+      App.setOrientation("landscape")
+    end)
+    at(0.7, function()
+      panel = App.push("transfer", { id = rec.id, op = "download", path = "report.txt" })
+      check(
+        "terminal download resolves cwd and filename",
+        panel.source == App.core.cwd(rec.id) .. "/report.txt"
+          and panel.field.value:match("/Downloads/report.txt$")
+      )
+    end)
+    at(0.4, function()
+      shot("qa_terminal_download")
+      App.pop(panel)
+    end)
+    at(0.4, function()
+      panel = App.push("transfer", { id = rec.id, op = "upload", path = "/tmp/example file.txt" })
+      check(
+        "terminal drop infers destination filename",
+        panel.field.value == App.core.cwd(rec.id) .. "/example file.txt"
+      )
+    end)
+    at(0.4, function()
+      shot("qa_terminal_upload")
+      App.pop(panel)
+      App.core.write(rec.id, "printf '\\nreport.txt  notes.md\\n'\n")
+    end)
+    at(0.6, function()
+      local sc = App.scene
+      for _, b in ipairs(sc.buttons) do
+        if b.id == "download" then
+          b.fn()
+          break
+        end
+      end
+      check(
+        "DOWNLOAD button enables filename picking",
+        sc.downloadPicking and not App.hasOverlay("transfer")
+      )
+      local tv = sc:view()
+      for row = 0, tv.rows - 1 do
+        if tv:rowText(row, 0, tv.cols - 1):match("^report.txt  notes.md") then
+          love.mouse.setPosition(
+            D.ox * D.s + sc.px + 12,
+            D.oy * D.s + sc.py + row * 16 * sc.zoom + 8
+          )
+          break
+        end
+      end
+    end)
+    at(0.3, function()
+      check("picking highlights the hovered filename", App.scene.hoverFilename == "report.txt")
+      check(
+        "terminal displays the live shell folder",
+        App.scene.displayedFolder == App.core.cwd(rec.id) and App.scene.displayedFolder ~= ""
+      )
+      shot("qa_terminal_download_pick")
+    end)
+    at(0.2, function()
+      App.scene:keypressed("escape", none)
+    end)
+    finish(0.5)
+    return
+  end
+
   if phase == "restorewrite" or phase == "restoreread" then
     -- Visible text of a session's screen, one string per row.
     local function screenText(id)
@@ -318,10 +442,8 @@ function M.run(App, phase)
       end
       return table.concat(out, "\n")
     end
-    -- Ask the remote shell to report its directory (OSC 7) the way modern
-    -- shells and Ubuntu bash do, then move; works in zsh and bash.
-    local hook = 'if [ -n "$ZSH_VERSION" ]; then precmd() { printf \'\\033]7;file://%s%s\\a\' "$HOST" "$PWD"; }; '
-      .. 'else PROMPT_COMMAND=\'printf "\\033]7;file://%s%s\\a" "$HOSTNAME" "$PWD"\'; fi; cd /tmp\n'
+    -- No test-installed hook: the application must track ordinary shells.
+    local hook = "cd /tmp\n"
     at(1, function()
       App.sessions.persistSessions = true
       if phase == "restorewrite" then

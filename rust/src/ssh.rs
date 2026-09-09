@@ -62,7 +62,7 @@ fn legacy_known_hosts_path() -> PathBuf {
     home.join(".config").join("cbo").join("known_hosts")
 }
 
-fn check_host_key(session: &ssh2::Session, host: &str, port: u16) -> Result<(), String> {
+pub(crate) fn check_host_key(session: &ssh2::Session, host: &str, port: u16) -> Result<(), String> {
     let (key, key_type) = session.host_key().ok_or("server sent no host key")?;
     let path = known_hosts_path();
     // Serialize read/check/write across threads AND app processes. A lost
@@ -121,7 +121,7 @@ fn check_host_key(session: &ssh2::Session, host: &str, port: u16) -> Result<(), 
     }
 }
 
-fn authenticate(session: &ssh2::Session, sess: &Session) -> Result<(), String> {
+pub(crate) fn authenticate(session: &ssh2::Session, sess: &Session) -> Result<(), String> {
     let p = &sess.params;
     let mut tried: Vec<String> = Vec::new();
 
@@ -188,7 +188,7 @@ fn expand_tilde(p: &str) -> String {
     p.to_string()
 }
 
-fn tcp_connect(host: &str, port: u16) -> Result<TcpStream, String> {
+pub(crate) fn tcp_connect(host: &str, port: u16) -> Result<TcpStream, String> {
     let addrs: Vec<_> = (host, port)
         .to_socket_addrs()
         .map_err(|e| format!("cannot resolve {}: {}", host, e))?
@@ -266,7 +266,10 @@ fn run(sess: &Arc<Session>, epoch: u32) -> Result<(), String> {
         )
         .map_err(|e| format!("request pty: {}", e.message()))?;
     channel
-        .shell()
+        .exec(&format!(
+            "/bin/sh -c {}",
+            shell_quote(include_str!("shell_init.sh"))
+        ))
         .map_err(|e| format!("shell: {}", e.message()))?;
 
     if stale(sess, epoch) || sess.close_requested.load(Ordering::SeqCst) {
@@ -462,4 +465,8 @@ fn graceful_close(session: &ssh2::Session, channel: &mut ssh2::Channel) {
     let _ = channel.close();
     let _ = channel.wait_close();
     let _ = session.disconnect(None, "bye", None);
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }

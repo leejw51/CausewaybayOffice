@@ -156,6 +156,20 @@ function love.wheelmoved(dx, dy)
   App.wheelmoved(dx, dy)
 end
 
+function love.filedropped(file)
+  if headless then
+    return
+  end
+  local path = file:getFilename()
+  file:close()
+  local overlay = App.overlays[#App.overlays]
+  if overlay and overlay.filedropped then
+    overlay:filedropped(path)
+  elseif not overlay and App.sceneName == "terminal" then
+    App.push("transfer", { id = App.scene.id, op = "upload", path = path, auto = true })
+  end
+end
+
 function love.resize(w, h)
   App.resize(w, h)
 end
@@ -164,6 +178,7 @@ function love.quit()
   require("src.ui").flush()
   App.cfg.save()
   App.sessions.saveHosts()
+  App.sessions.update(0)
   App.sessions.saveRestore()
   App.core.shutdown()
 end

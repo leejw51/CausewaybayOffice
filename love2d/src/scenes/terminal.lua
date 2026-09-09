@@ -21,8 +21,15 @@ local Term = {}
 Term.__index = Term
 
 local TAB_H = 16
-local TAB_BUTTONS =
-  { { "< LOBBY", true }, { "MAP", false }, { "MAP2", false }, { "AI CLOSE", false } }
+local CWD_H = 16
+local TAB_BUTTONS = {
+  { "< LOBBY", true },
+  { "MAP", false },
+  { "MAP2", false },
+  { "AI CLOSE", false },
+  { "UPLOAD", false },
+  { "DOWNLOAD", false },
+}
 local STATUS_H = 16
 local PAD = 4
 local ESC_DOUBLE = 0.3
@@ -84,14 +91,94 @@ function Term:toMap()
   self.app.switch("map", { fromTerminal = true })
 end
 
+function Term:fileTarget(mx, my)
+  local Paths = require("src.terminal_files")
+  local tv = self:view()
+  local selected = tv:selectedText()
+  if selected and selected ~= "" and not selected:find("\n", 1, true) then
+    return Paths.clean(selected)
+  end
+  if mx < self.ox or mx >= self.ox + self.gw or my < self.oy or my >= self.oy + self.gh then
+    return nil
+  end
+  local cx, cy = self:cellAt(mx, my)
+  local token = Paths.at(tv, cx, cy)
+  return token and token.name or nil
+end
+function Term:resetFileCursor()
+  if self.fileCursorActive then
+    love.mouse.setCursor()
+    self.fileCursorActive = nil
+  end
+end
+
+function Term:toggleDownloadPick()
+  self:resetFileCursor()
+  self.downloadPicking = not self.downloadPicking
+  self.dragging = false
+  self:view().sel = nil
+  self.completionBox, self.transferBox = nil, nil
+  if self.downloadPicking then
+    self.app.toast("Click a filename to download. Esc cancels.")
+  end
+end
+
+function Term:download(path)
+  self.downloadPicking = false
+  self:resetFileCursor()
+  if not path then
+    local mx, my = self.app.D.toVirtual(love.mouse.getPosition())
+    path = self:fileTarget(mx, my)
+  end
+  self.app.push("transfer", { id = self.id, op = "download", path = path, auto = path ~= nil })
+end
+function Term:upload()
+  self.downloadPicking = false
+  self:resetFileCursor()
+  self.app.push("transfer", { id = self.id, op = "upload", auto = true })
+end
+
 -- Context menu (right-click on the grid, wheel over the top bar).
 function Term:openMenu(mx, my)
   local app = self.app
+  local filename = self:fileTarget(mx, my)
   app.push("menu", {
     title = "SESSION",
     x = mx,
     y = my,
     items = {
+      {
+        filename and ("Download " .. (require("utf8").len(filename) > 30 and filename:sub(
+          1,
+          (require("utf8").offset(filename, 28) or #filename) - 1
+        ) .. "…" or filename)) or "Download file...",
+        function()
+          self:download(filename)
+        end,
+      },
+      {
+        "Upload file to this folder...",
+        function()
+          self:upload()
+        end,
+      },
+      {
+        "Recent transfer / show download folder",
+        function()
+          local rec = app.sessions.get(self.id)
+          if rec and (rec.quickTransfer or rec.lastTransfer) then
+            app.push("transfer", { id = self.id, details = true })
+          else
+            app.toast("No transfers in this session yet")
+          end
+        end,
+      },
+      {
+        "Files: upload / download  (^Shift+F)",
+        function()
+          app.push("files", { id = self.id })
+        end,
+      },
       {
         "Back to lobby  (F2)",
         function()
@@ -127,6 +214,8 @@ function Term:openMenu(mx, my)
 end
 
 function Term:leave()
+  self.downloadPicking = false
+  self:resetFileCursor()
   if self.ai then
     self.ai:close()
   end
@@ -149,7 +238,7 @@ end
 
 function Term.aiHeightFor(D)
   local rowsPx = math.ceil(24 * 16 * D.termZoom / D.s)
-  local free = D.vh - TAB_H - STATUS_H - PAD * 2
+  local free = D.vh - TAB_H - CWD_H - STATUS_H - PAD * 2
   local h = math.floor(D.vh * 0.45)
   -- Short portrait windows still need a readable chat, even when 24 terminal
   -- rows and a useful chat cannot both fit. Tall portrait keeps those 24 rows.
@@ -177,7 +266,11 @@ function Term.titleRows(D, rec, G)
   end
   local buttons = 4 + 4 + 12 -- gaps + led
   for _, b in ipairs(TAB_BUTTONS) do
-    buttons = buttons + G.uiWidth(b[1]) + (b[2] and 26 or 12) + 4
+    local visible = not ((b[1] == "MAP" or b[1] == "MAP2") and D.vw < 550)
+      and not (b[1] == "AI CLOSE" and D.vw < 440)
+    if visible then
+      buttons = buttons + G.uiWidth(b[1]) + (b[2] and 26 or 12) + 4
+    end
   end
   local icons = 8 + 20 * 2 + 8
   local room = D.vw - buttons - icons
@@ -193,13 +286,13 @@ end
 -- Height of the chrome above the grid (tab strip, plus the title row).
 function Term:chromeTop()
   local app = self.app
-  return TAB_H * Term.titleRows(app.D, app.sessions.get(self.id), app.G)
+  return TAB_H * Term.titleRows(app.D, app.sessions.get(self.id), app.G) + CWD_H
 end
 
 -- Free area for the grid given the AI panel size along its dock axis.
 function Term.availFor(D, aiSize, top)
   local availW = D.vw - PAD * 2
-  local availH = D.vh - (top or TAB_H) - STATUS_H - PAD * 2
+  local availH = D.vh - (top or (TAB_H + CWD_H)) - STATUS_H - PAD * 2
   if Term.aiDock(D) == "bottom" then
     availH = availH - aiSize
   else
@@ -274,6 +367,8 @@ function Term:view()
 end
 
 function Term:cycle(dir)
+  self.downloadPicking = false
+  self:resetFileCursor()
   local app = self.app
   local rec = app.sessions.neighbor(self.id, dir)
   if not rec or rec.id == self.id then
@@ -424,6 +519,21 @@ function Term:acceptsWithRight(key, m)
 end
 
 function Term:keypressed(key, m)
+  if key == "escape" and self.downloadPicking then
+    self.downloadPicking = false
+    self:resetFileCursor()
+    self.lastEsc = -1
+    return
+  end
+  if m.ctrl and m.shift and key == "u" then
+    return self:upload()
+  end
+  if m.ctrl and m.shift and key == "d" then
+    return self:toggleDownloadPick()
+  end
+  if key == "f" and m.ctrl and m.shift then
+    return self.app.push("files", { id = self.id })
+  end
   if key == "space" and m.ctrl and not m.shift and not self.aiOpen then
     self:refreshCompletion()
     if self.suggestion then
@@ -576,6 +686,20 @@ function Term:mousepressed(mx, my, b)
   if b ~= 1 then
     return
   end
+  if
+    (love.keyboard.isDown("lgui", "rgui", "lctrl", "rctrl"))
+    and my >= (self.top or TAB_H)
+    and my < self.app.D.vh - STATUS_H
+  then
+    local path = self:fileTarget(mx, my)
+    if path then
+      return self:download(path)
+    end
+  end
+  if self.transferBox and UI.inside(mx, my, unpack(self.transferBox)) then
+    self.app.push("transfer", { id = self.id, details = true })
+    return
+  end
   if self.completionBox and UI.inside(mx, my, unpack(self.completionBox)) then
     return self:acceptCompletion()
   end
@@ -588,6 +712,13 @@ function Term:mousepressed(mx, my, b)
   end
   if self.aiOpen and self.ai and self.ai:hover(mx, my) then
     self.ai:mousepressed(mx, my, b)
+    return
+  end
+  if self.downloadPicking then
+    local path = self:fileTarget(mx, my)
+    if path then
+      self:download(path)
+    end
     return
   end
   local tv = self:view()
@@ -654,6 +785,48 @@ end
 
 -- The learned completion, dimmed, from the cursor cell to the right edge.
 -- Drawn in grid space (screen px, 8x16 cells at the terminal zoom).
+function Term:drawFileLink(tv, zoom)
+  self.fileHint, self.hoverFilename = nil, nil
+  if #self.app.overlays > 0 then
+    self:resetFileCursor()
+    return
+  end
+  local mx, my = self.app.D.toVirtual(love.mouse.getPosition())
+  if mx < self.ox or mx >= self.ox + self.gw or my < self.oy or my >= self.oy + self.gh then
+    self:resetFileCursor()
+    return
+  end
+  local cx, cy = self:cellAt(mx, my)
+  local token = require("src.terminal_files").at(tv, cx, cy)
+  if self.downloadPicking then
+    local kind = token and "hand" or "crosshair"
+    self.fileCursors = self.fileCursors or {}
+    self.fileCursors[kind] = self.fileCursors[kind] or love.mouse.getSystemCursor(kind)
+    if self.fileCursorActive ~= kind then
+      love.mouse.setCursor(self.fileCursors[kind])
+      self.fileCursorActive = kind
+    end
+  else
+    self:resetFileCursor()
+  end
+  self.hoverFilename = token and token.name or nil
+  if not token then
+    return
+  end
+  self.fileHint = (self.downloadPicking and "Click to download " or "Cmd/Ctrl+click: download ")
+    .. token.name
+  if self.downloadPicking or love.keyboard.isDown("lgui", "rgui", "lctrl", "rctrl") then
+    self.app.G.color("cyan")
+    love.graphics.rectangle(
+      "fill",
+      token.first * 8 * zoom,
+      (cy + 1) * 16 * zoom - 2,
+      (token.last - token.first + 1) * 8 * zoom,
+      1
+    )
+  end
+end
+
 function Term:drawGhost(tv, zoom)
   local suffix = self:ghostText()
   if not suffix or not tv.cvis or tv.cx >= (tv.cols or 0) or tv.cy >= (tv.rows or 0) then
@@ -690,6 +863,42 @@ function Term:ghostText()
   return suffix
 end
 
+function Term:drawFolderBar(y)
+  local app, utf8 = self.app, require("utf8")
+  local G, vw = app.G, app.D.vw
+  local path = app.core.cwd(self.id)
+  self.displayedFolder = path
+  G.panel(0, y, vw, CWD_H, "ink", "dblue")
+  G.ui("FOLDER", 8, y + 4, "gray")
+  local px = 16 + G.uiWidth("FOLDER")
+  if path == "" then
+    G.ui("Waiting for shell...", px, y + 4, "dgray")
+    return
+  end
+  local copyW = G.uiWidth("COPY") + 12
+  local room = vw - copyW - 16 - px
+  local shown = path:gsub("[%z\1-\31\127]", "?")
+  local shortened = false
+  while #shown > 0 and G.uiWidth((shortened and "…" or "") .. shown) > room do
+    shown = shown:sub(utf8.offset(shown, 2) or (#shown + 1))
+    shortened = true
+  end
+  G.ui((shortened and "…" or "") .. shown, px, y + 4, "cyan")
+  G.panel(vw - copyW - 4, y + 1, copyW, CWD_H - 2, "ink", "cyan")
+  G.ui("COPY", vw - copyW + 2, y + 4, "yellow")
+  self.buttons[#self.buttons + 1] = {
+    id = "folder",
+    x = px,
+    y = y,
+    w = vw - px - 4,
+    h = CWD_H,
+    fn = function()
+      love.system.setClipboardText(path)
+      app.toast("Folder path copied")
+    end,
+  }
+end
+
 function Term:drawTabStrip(rec)
   local app = self.app
   local G, D = app.G, app.D
@@ -710,6 +919,9 @@ function Term:drawTabStrip(rec)
     local lift = (self.hover[id] and self.hover[id].lift) or 0
     local by = 1 - math.floor(lift + 0.5)
     G.frame(x, by, w, TAB_H - 2, 1)
+    if id == "download" and self.downloadPicking then
+      G.panel(x, by, w, TAB_H - 2, "dblue", "cyan")
+    end
     if icon then
       G.drawIcon(icon, x + 5, by + 1, 12)
     end
@@ -720,14 +932,24 @@ function Term:drawTabStrip(rec)
   button("lobby", "< LOBBY", "icon_session", function()
     self:toLobby()
   end)
-  button("map", "MAP", nil, function()
-    self:toMap()
+  if vw >= 550 then
+    button("map", "MAP", nil, function()
+      self:toMap()
+    end)
+    button("map2", "MAP2", nil, function()
+      app.switch("map2")
+    end)
+  end
+  if vw >= 440 then
+    button("ai", self.aiOpen and "AI CLOSE" or "AI CHAT", nil, function()
+      self:toggleAI()
+    end)
+  end
+  button("upload", "UPLOAD", nil, function()
+    self:upload()
   end)
-  button("map2", "MAP2", nil, function()
-    app.switch("map2")
-  end)
-  button("ai", self.aiOpen and "AI CLOSE" or "AI CHAT", nil, function()
-    self:toggleAI()
+  button("download", "DOWNLOAD", nil, function()
+    self:toggleDownloadPick()
   end)
   x = x + 4
   G.drawFrame(G.ledStrip(8), Lobby.ledFrame(G, ST, rec.state, self.t), x, 4, 1, 1)
@@ -795,6 +1017,7 @@ function Term:drawTabStrip(rec)
   if hx > x + 4 then
     G.ui(hint, hx, 4, panelOpen and "yellow" or "dgray")
   end
+  self:drawFolderBar(top)
 end
 
 function Term:drawStatus(rec)
@@ -858,10 +1081,59 @@ function Term:drawStatus(rec)
     love.graphics.rectangle("fill", rightX - 4, y + 1, vw - rightX + 4, STATUS_H - 1)
   end
   G.ui(right, rightX, y + 5, "gray")
-  self.completionBox = nil
-  if self.suggestion then
+  self.completionBox, self.transferBox = nil, nil
+  if self.downloadPicking then
+    local hint = "DOWNLOAD: click filename  |  Esc cancel"
+    if G.uiWidth(hint) > vw - 16 then
+      hint = "Click filename / Esc cancel"
+    end
+    G.panel(4, y + 1, vw - 8, STATUS_H - 2, "ink", "cyan")
+    if self.hoverFilename then
+      local cancel = "Esc cancel"
+      local label = "Download " .. self.hoverFilename
+      local utf8 = require("utf8")
+      local width = vw - G.uiWidth(cancel) - 32
+      while #label > 0 and G.uiWidth(label .. "…") > width do
+        label = label:sub(1, (utf8.offset(label, -1) or 1) - 1)
+      end
+      if label ~= "Download " .. self.hoverFilename then
+        label = label .. "…"
+      end
+      G.ui(label, 8, y + 5, "yellow")
+      G.ui(cancel, vw - G.uiWidth(cancel) - 8, y + 5, "cyan")
+    else
+      G.ui(hint, 8, y + 5, "yellow")
+    end
+    return
+  end
+  local transfer = rec.quickTransfer
+    or (
+      rec.lastTransfer
+      and app.time - (rec.lastTransfer.finishedAt or 0) < 12
+      and rec.lastTransfer
+    )
+  if transfer then
+    local st = transfer.status or {}
+    local progress = (st.total or 0) > 0
+        and string.format(" %d%%", math.floor((st.done or 0) * 100 / st.total))
+      or "..."
+    local label = (transfer.op == "upload" and "UPLOAD " or "DOWNLOAD ")
+      .. (transfer.name or "file")
+      .. (rec.quickTransfer and progress or (transfer.error and " - retry" or " - done"))
     local width = math.max(0, rightX - 12)
-    local text = "-> " .. self.suggestion .. "   (Right / ^Space)"
+    local utf8 = require("utf8")
+    while G.uiWidth(label) > width - 8 and #label > 0 do
+      label = label:sub(1, (utf8.offset(label, -1) or 1) - 1)
+    end
+    if width > 60 then
+      G.panel(4, y + 1, width, STATUS_H - 2, "ink", transfer.error and "alarm" or "cyan")
+      G.ui(label, 8, y + 5, transfer.error and "alarm" or "cyan")
+      self.transferBox = { 4, y + 1, width, STATUS_H - 2 }
+    end
+  elseif self.suggestion or self.fileHint then
+    local width = math.max(0, rightX - 12)
+    local text = self.suggestion and ("-> " .. self.suggestion .. "   (Right / ^Space)")
+      or self.fileHint
     local utf8 = require("utf8")
     while G.uiWidth(text) > width - 8 and #text > 0 do
       text = text:sub(1, (utf8.offset(text, -1) or 1) - 1)
@@ -869,7 +1141,7 @@ function Term:drawStatus(rec)
     if width > 60 then
       G.panel(4, y + 1, width, STATUS_H - 2, "ink", "cyan")
       G.ui(text, 8, y + 5, "cyan")
-      self.completionBox = { 4, y + 1, width, STATUS_H - 2 }
+      self.completionBox = self.suggestion and { 4, y + 1, width, STATUS_H - 2 } or nil
     end
   end
 end
@@ -914,6 +1186,7 @@ function Term:draw()
   self:pushGridSpace(sx)
   tv:draw(0, 0, zoom, crtOpts)
   self:drawGhost(tv, zoom)
+  self:drawFileLink(tv, zoom)
   love.graphics.pop()
 
   -- scrollback badge (UI chrome, drawn at the UI scale)
@@ -975,4 +1248,5 @@ end
 
 Term.STATUS_H = STATUS_H
 Term.TAB_H = TAB_H
+Term.CWD_H = CWD_H
 return Term

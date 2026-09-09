@@ -10,6 +10,7 @@ pub mod db;
 pub mod display_log;
 pub mod embed;
 pub mod favorites;
+pub mod files;
 pub mod fuzzy;
 pub mod graphics;
 pub mod input_history;
@@ -1191,6 +1192,28 @@ pub extern "C" fn cbo_predict_next(host_id: i32, limit: i32) -> *const c_char {
             "[]",
         )
     })
+}
+
+// ---- file browser / transfers -----------------------------------------------
+/// # Safety
+/// `request` is NULL or a valid NUL-terminated UTF-8 JSON string.
+#[no_mangle]
+pub unsafe extern "C" fn cbo_files_start(id: i32, request: *const c_char) -> i32 {
+    guard(-1, || match files::start(id, cstr(request).unwrap_or("")) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    })
+}
+#[no_mangle]
+pub extern "C" fn cbo_files_status(id: i32) -> *const c_char {
+    guard(std::ptr::null(), || ret_str(&files::status(id)))
+}
+#[no_mangle]
+pub extern "C" fn cbo_files_cancel(id: i32) {
+    guard((), || files::cancel(id));
 }
 
 #[cfg(test)]

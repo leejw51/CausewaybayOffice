@@ -132,7 +132,7 @@ fn percent_decode(s: &str) -> String {
 /// The path in an OSC 7 body: `file://host/path`, `kitty-shell-cwd://host/path`
 /// or a bare absolute path. None when there is no usable path.
 fn osc7_path(body: &[u8]) -> Option<String> {
-    let body = std::str::from_utf8(body).ok()?.trim();
+    let body = std::str::from_utf8(body).ok()?;
     let path = match body.find("://") {
         Some(i) => {
             let rest = &body[i + 3..];

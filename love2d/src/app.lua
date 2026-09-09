@@ -337,6 +337,27 @@ function App.update(dt)
   Core.update(dt)
   Sessions.update(dt)
   App.updateIris(dt)
+  App.filePollAge = (App.filePollAge or 0) + dt
+  if App.filePollAge >= 0.2 then
+    App.filePollAge = 0
+    for _, rec in ipairs(Sessions.list) do
+      if rec.quickTransfer and not App.hasOverlay("transfer") then
+        local st = Core.filesStatus(rec.id)
+        rec.quickTransfer.status = st
+        if st.state == "done" or st.state == "error" or st.state == "cancelled" then
+          App.toast(
+            st.state == "done" and ("Transferred " .. (rec.quickTransfer.name or "file"))
+              or (st.error or st.state)
+          )
+          rec.quickTransfer.finishedAt = App.time
+          rec.quickTransfer.done = st.state == "done"
+          rec.quickTransfer.error = st.state ~= "done" and (st.error or st.state) or nil
+          rec.lastTransfer = rec.quickTransfer
+          rec.quickTransfer = nil
+        end
+      end
+    end
+  end
   -- drop views of sessions that vanished
   for id in pairs(App.views) do
     if not Sessions.byId[id] then
