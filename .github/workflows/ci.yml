@@ -64,12 +64,15 @@ jobs:
       - run: cargo fmt --check
         working-directory: rust
       - run: make lint-rust
-      # The ssh tests skip themselves when nothing answers on 127.0.0.1:22 and
-      # the live provider tests skip without CBO_LIVE=1, so this is the
-      # deterministic subset: VT100, SSE parsing, names, search, the sqlite
-      # store and the C ABI.
+      # CBO_IT=0 turns the ssh tests off: the runner has an sshd on port 22
+      # that its own user cannot log in to, so autodetection would try and
+      # fail. The live provider tests skip without CBO_LIVE=1. What remains
+      # is the deterministic subset: VT100, SSE parsing, names, search, the
+      # sqlite store and the C ABI.
       - run: cargo test --release
         working-directory: rust
+        env:
+          CBO_IT: "0"
 
   lua:
     name: Lua (stylua, LuaJIT, C ABI)

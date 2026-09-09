@@ -56,9 +56,13 @@ pub fn isolate_home() -> std::path::PathBuf {
 }
 
 /// The ssh tests run when CBO_IT=1 or when a local sshd answers on port 22.
+/// CBO_IT=0 forces them off: CI runners often have an sshd listening that
+/// the runner's own user cannot log in to.
 pub fn ssh_enabled() -> bool {
-    if std::env::var("CBO_IT").map(|v| v == "1").unwrap_or(false) {
-        return true;
+    match std::env::var("CBO_IT").as_deref() {
+        Ok("1") => return true,
+        Ok("0") => return false,
+        _ => {}
     }
     let addr: SocketAddr = "127.0.0.1:22".parse().expect("addr");
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
