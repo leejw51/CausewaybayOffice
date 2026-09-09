@@ -17,6 +17,38 @@ function S.hostKey(h)
   return (h.user or "") .. "@" .. (h.host or "") .. ":" .. tostring(h.port or 22)
 end
 
+-- Last remote working directory: remembered per session for restore and per
+-- host for the next manual connection, sent back as a `cd` once the shell
+-- has settled after connecting.
+S.CWD_SETTLE = 0.4 -- seconds of quiet screen before the cd is typed
+
+function S.cwdKey(h)
+  return "cwd." .. S.hostKey(h)
+end
+
+function S.lastCwd(h)
+  local v = S.core and S.core.kvGet and S.core.kvGet(S.cwdKey(h)) or ""
+  return v ~= "" and v or nil
+end
+
+-- `cd` line for a remembered directory. A leading space keeps it out of shell
+-- history where HISTCONTROL ignores it; single quotes carry any character
+-- but a quote, which is spliced in.
+function S.cdCommand(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  if path == "~" then
+    return " cd ~\n"
+  end
+  local quoted = "'" .. path:gsub("'", "'\\''") .. "'"
+  if path:sub(1, 2) == "~/" then
+    -- keep the tilde outside the quotes so the shell still expands it
+    quoted = "~/'" .. path:sub(3):gsub("'", "'\\''") .. "'"
+  end
+  return " cd " .. quoted .. "\n"
+end
+
 -- Hosts sorted by platform (stable map order); assigns platforms first.
 function S.mapHosts()
   local MG = require("src.mapgraph")
@@ -326,7 +358,12 @@ function S.open(p)
     createdAt = os.time(),
     lastPing = 0,
     pulse = 0,
+    wantCwd = p.cwd or S.lastCwd(p),
+    lastGen = -1,
+    quiet = 0,
   }
+  rec.cwd = rec.wantCwd
+  rec.cwdArmed = rec.wantCwd == nil -- learn cwd only once the cd went out
   S.list[#S.list + 1] = rec
   S.byId[id] = rec
   if not p.noRemember then
@@ -362,6 +399,7 @@ function S.saveRestore()
         keypath = rec.keypath,
         name = rec.name,
         platform = rec.mapPlatform,
+        cwd = rec.cwd,
       }
     end
   end
@@ -395,6 +433,7 @@ function S.restore(cols, rows)
         keypath = type(h.keypath) == "string" and h.keypath or "",
         platform = type(h.platform) == "number" and h.platform or nil,
         name = type(h.name) == "string" and h.name ~= "" and h.name or nil,
+        cwd = type(h.cwd) == "string" and h.cwd ~= "" and h.cwd or nil,
         cols = cols,
         rows = rows,
       })
@@ -467,7 +506,7 @@ end
 function S.update(dt)
   local ST = S.core.ST
   local i = 1
-  local newlyConnected = false
+  local newlyConnected, cwdChanged = false, false
   while i <= #S.list do
     local rec = S.list[i]
     local info = S.core.info(rec.id)
@@ -484,6 +523,9 @@ function S.update(dt)
         rec.lastPing = info.last_ping_ms
         rec.pulse = 1
       end
+      if info.state == ST.CONNECTED and S.trackCwd(rec, info.generation, dt or 0) then
+        cwdChanged = true
+      end
       if rec.closing and (info.state == ST.CLOSED or info.state == ST.ERROR) then
         S.remove(rec.id)
         i = i - 1
@@ -493,9 +535,38 @@ function S.update(dt)
     end
     i = i + 1
   end
-  if newlyConnected then
+  if newlyConnected or cwdChanged then
     S.saveRestore()
   end
+end
+
+-- One connected session's cwd bookkeeping. Types the remembered `cd` once
+-- the screen has been quiet for CWD_SETTLE after the first output (the
+-- prompt), then follows the shell's reports. Returns true when the saved
+-- cwd changed.
+function S.trackCwd(rec, gen, dt)
+  if rec.wantCwd then
+    if gen ~= rec.lastGen then
+      rec.lastGen, rec.quiet = gen, 0
+    elseif gen > 0 then
+      rec.quiet = rec.quiet + dt
+      if rec.quiet >= S.CWD_SETTLE then
+        S.core.write(rec.id, S.cdCommand(rec.wantCwd))
+        rec.wantCwd, rec.cwdArmed = nil, true
+      end
+    end
+    return false
+  end
+  if not rec.cwdArmed then
+    return false
+  end
+  local cwd = S.core.cwd(rec.id)
+  if cwd == "" or cwd == rec.cwd then
+    return false
+  end
+  rec.cwd = cwd
+  S.core.kvSet(S.cwdKey(rec), cwd)
+  return true
 end
 
 function S.count()

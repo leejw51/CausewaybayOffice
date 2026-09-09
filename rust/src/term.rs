@@ -89,6 +89,76 @@ pub struct Term {
     /// Set when the client asked for window/cell pixel sizes (CSI 14/16 t)
     /// or the cell size changed; the SSH worker re-sends the pty size.
     pixel_size_changed: bool,
+    /// Remote working directory reported by OSC 7 (`file://host/path`);
+    /// empty until the shell reports one.
+    osc7_cwd: String,
+    /// OSC 7 scanner state, so a report may straddle reads.
+    osc7: Osc7,
+}
+
+#[derive(Default)]
+enum Osc7 {
+    #[default]
+    Ground,
+    Esc,
+    Bracket,
+    Seven,
+    Body(Vec<u8>),
+    BodyEsc(Vec<u8>),
+}
+
+const MAX_OSC7: usize = 4096;
+
+/// Decode `%XX` escapes; a malformed escape is kept as typed.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok();
+            if let Some(v) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The path in an OSC 7 body: `file://host/path`, `kitty-shell-cwd://host/path`
+/// or a bare absolute path. None when there is no usable path.
+fn osc7_path(body: &[u8]) -> Option<String> {
+    let body = std::str::from_utf8(body).ok()?.trim();
+    let path = match body.find("://") {
+        Some(i) => {
+            let rest = &body[i + 3..];
+            let slash = rest.find('/')?;
+            &rest[slash..]
+        }
+        None => body,
+    };
+    if !path.starts_with('/') {
+        return None;
+    }
+    Some(percent_decode(path))
+}
+
+/// A directory shown in a window title, the `user@host: ~/dir` form that
+/// Debian and Ubuntu bash use by default. None when the title has no path.
+fn title_path(title: &str) -> Option<String> {
+    let t = title.trim();
+    let tail = match t.find(": ") {
+        Some(i) if t[..i].contains('@') => t[i + 2..].trim(),
+        _ => t,
+    };
+    if tail.is_empty() || tail.contains(' ') && !tail.starts_with('/') && !tail.starts_with('~') {
+        return None;
+    }
+    (tail.starts_with('/') || tail == "~" || tail.starts_with("~/")).then(|| tail.to_string())
 }
 
 impl Term {
@@ -100,6 +170,8 @@ impl Term {
             gfx: Graphics::default(),
             scroll_base: 0,
             pixel_size_changed: false,
+            osc7_cwd: String::new(),
+            osc7: Osc7::Ground,
         }
     }
 
@@ -146,6 +218,72 @@ impl Term {
             self.gfx.clear_alt();
         }
         self.scan_csi(t);
+        self.scan_osc7(t);
+    }
+
+    /// Track `ESC ] 7 ; file://host/path (BEL | ESC \)`, the shell's report of
+    /// its working directory. vt100 ignores OSC 7, so it is picked up here.
+    fn scan_osc7(&mut self, t: &[u8]) {
+        for &b in t {
+            self.osc7 = match std::mem::take(&mut self.osc7) {
+                Osc7::Ground => {
+                    if b == 0x1b {
+                        Osc7::Esc
+                    } else {
+                        Osc7::Ground
+                    }
+                }
+                Osc7::Esc => match b {
+                    b']' => Osc7::Bracket,
+                    0x1b => Osc7::Esc,
+                    _ => Osc7::Ground,
+                },
+                Osc7::Bracket => match b {
+                    b'7' => Osc7::Seven,
+                    0x1b => Osc7::Esc,
+                    _ => Osc7::Ground,
+                },
+                Osc7::Seven => match b {
+                    b';' => Osc7::Body(Vec::new()),
+                    0x1b => Osc7::Esc,
+                    _ => Osc7::Ground,
+                },
+                Osc7::Body(mut body) => match b {
+                    0x07 => {
+                        self.set_osc7(&body);
+                        Osc7::Ground
+                    }
+                    0x1b => Osc7::BodyEsc(body),
+                    _ => {
+                        if body.len() < MAX_OSC7 {
+                            body.push(b);
+                        }
+                        Osc7::Body(body)
+                    }
+                },
+                Osc7::BodyEsc(body) => {
+                    if b == b'\\' {
+                        self.set_osc7(&body);
+                    }
+                    Osc7::Ground
+                }
+            };
+        }
+    }
+
+    fn set_osc7(&mut self, body: &[u8]) {
+        if let Some(p) = osc7_path(body) {
+            self.osc7_cwd = p;
+        }
+    }
+
+    /// The remote working directory as far as the terminal can tell: the last
+    /// OSC 7 report, else a path in the window title. "" when unknown.
+    pub fn cwd(&self) -> String {
+        if !self.osc7_cwd.is_empty() {
+            return self.osc7_cwd.clone();
+        }
+        title_path(self.title()).unwrap_or_default()
     }
 
     /// The few CSI sequences the graphics layer cares about: screen erase
@@ -462,6 +600,42 @@ mod tests {
         assert_eq!(cells[7].cp, 0);
         assert_eq!(cells[7].width, 1);
         assert_eq!(t.generation(), 1);
+    }
+
+    #[test]
+    fn cwd_from_osc7_bel_st_and_split_reads() {
+        let mut t = Term::new(40, 4);
+        assert_eq!(t.cwd(), "");
+        t.process(b"\x1b]7;file://box/home/alice\x07$ ");
+        assert_eq!(t.cwd(), "/home/alice");
+        t.process(b"\x1b]7;file://box/srv/my%20app\x1b\\");
+        assert_eq!(t.cwd(), "/srv/my app");
+        // split across three reads, kitty scheme, then a non-7 OSC keeps it
+        t.process(b"\x1b]");
+        t.process(b"7;kitty-shell-cwd://box/opt/");
+        t.process(b"data\x07");
+        assert_eq!(t.cwd(), "/opt/data");
+        t.process(b"\x1b]0;some title\x07");
+        assert_eq!(t.cwd(), "/opt/data");
+        // a bare relative body is ignored
+        t.process(b"\x1b]7;nothing\x07");
+        assert_eq!(t.cwd(), "/opt/data");
+    }
+
+    #[test]
+    fn cwd_falls_back_to_debian_style_title() {
+        let mut t = Term::new(40, 4);
+        t.process(b"\x1b]0;alice@box: ~/work/api\x07");
+        assert_eq!(t.cwd(), "~/work/api");
+        t.process(b"\x1b]0;alice@box: /var/log\x07");
+        assert_eq!(t.cwd(), "/var/log");
+        t.process(b"\x1b]0;vim README.md\x07");
+        assert_eq!(t.cwd(), "");
+        t.process(b"\x1b]0;~\x07");
+        assert_eq!(t.cwd(), "~");
+        // OSC 7 wins over the title once seen
+        t.process(b"\x1b]7;file:///tmp\x07\x1b]0;alice@box: ~\x07");
+        assert_eq!(t.cwd(), "/tmp");
     }
 
     #[test]

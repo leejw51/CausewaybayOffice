@@ -272,7 +272,16 @@ local function runCommand(sess, line)
   elseif cmd == "bell" then
     sess.bells = sess.bells + 1
   elseif cmd == "pwd" then
-    puts(s, "/home/" .. sess.user .. "\n")
+    puts(s, (sess.cwd or ("/home/" .. sess.user)) .. "\n")
+  elseif cmd == "cd" then
+    local dir = rest:gsub("'", ""):match("^(%S*)")
+    if dir == "" or dir == "~" then
+      sess.cwd = nil
+    elseif dir:sub(1, 1) == "/" then
+      sess.cwd = dir
+    else
+      sess.cwd = (sess.cwd or ("/home/" .. sess.user)) .. "/" .. dir
+    end
   elseif cmd == "uname" then
     puts(s, "Darwin\n")
   elseif cmd == "whoami" then
@@ -648,6 +657,11 @@ end
 function M.cbo_term_title(id)
   local s = sessions[id]
   return s and (s.user .. "@" .. s.host) or ""
+end
+
+function M.cbo_term_cwd(id)
+  local s = sessions[id]
+  return s and s.cwd or ""
 end
 
 function M.cbo_term_take_bell(id)

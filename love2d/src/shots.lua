@@ -302,12 +302,34 @@ function M.run(App, phase)
   end
 
   if phase == "restorewrite" or phase == "restoreread" then
+    -- Visible text of a session's screen, one string per row.
+    local function screenText(id)
+      local cells, cols, rows = App.core.snapshot(id)
+      local out = {}
+      for r = 0, rows - 1 do
+        local t = {}
+        for c = 0, cols - 1 do
+          local cell = cells[r * cols + c]
+          if cell.width ~= 0 then
+            t[#t + 1] = cell.cp == 0 and " " or utf8.char(cell.cp)
+          end
+        end
+        out[#out + 1] = table.concat(t)
+      end
+      return table.concat(out, "\n")
+    end
+    -- Ask the remote shell to report its directory (OSC 7) the way modern
+    -- shells and Ubuntu bash do, then move; works in zsh and bash.
+    local hook = 'if [ -n "$ZSH_VERSION" ]; then precmd() { printf \'\\033]7;file://%s%s\\a\' "$HOST" "$PWD"; }; '
+      .. 'else PROMPT_COMMAND=\'printf "\\033]7;file://%s%s\\a" "$HOSTNAME" "$PWD"\'; fi; cd /tmp\n'
     at(1, function()
       App.sessions.persistSessions = true
       if phase == "restorewrite" then
         App.sessions.open({ host = "localhost", user = os.getenv("USER") or "dev", name = "mary-1" })
         App.sessions.open({ host = "localhost", user = os.getenv("USER") or "dev", name = "john-2" })
       else
+        -- forget the per-host memory so the JSONL record alone must carry it
+        App.core.kvSet("cwd." .. (os.getenv("USER") or "dev") .. "@localhost:22", "")
         App.sessions.restore(App.termGrid())
       end
       App.switch("map2")
@@ -325,10 +347,45 @@ function M.run(App, phase)
           "renamed session written to JSONL",
           App.core.sessionsLoad():find("work-2", 1, true) ~= nil
         )
+        App.core.write(App.sessions.list[2].id, hook)
       else
         check(
           "names survived a separate app process",
           App.sessions.list[1].name == "mary-1" and App.sessions.list[2].name == "work-2"
+        )
+        check(
+          "restored session carries the saved directory",
+          App.sessions.list[2].wantCwd == "/tmp" or App.sessions.list[2].cwd == "/tmp"
+        )
+        App.core.write(App.sessions.list[2].id, "pwd\n")
+      end
+    end)
+    at(1.5, function()
+      local rec = App.sessions.list[2]
+      if phase == "restorewrite" then
+        check(
+          "core sees the OSC 7 directory report",
+          App.core.cwd(rec.id) == "/tmp",
+          App.core.cwd(rec.id)
+        )
+        check("directory kept on the session record", rec.cwd == "/tmp", tostring(rec.cwd))
+        check(
+          "directory written to JSONL",
+          App.core.sessionsLoad():find('"cwd":"/tmp"', 1, true) ~= nil,
+          App.core.sessionsLoad()
+        )
+        check(
+          "directory remembered for the host",
+          App.sessions.lastCwd(rec) == "/tmp",
+          tostring(App.sessions.lastCwd(rec))
+        )
+      else
+        local text = screenText(rec.id)
+        check("cd was typed after the prompt settled", rec.wantCwd == nil)
+        check(
+          "restored shell is back in /tmp (pwd prints it)",
+          text:find("\n/tmp%s*\n") ~= nil or text:find("\n/private/tmp%s*\n") ~= nil,
+          text
         )
         App.sessions.close(App.sessions.list[1].id)
         check(

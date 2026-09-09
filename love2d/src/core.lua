@@ -216,6 +216,12 @@ function Core.title(id)
   return str(lib.cbo_term_title(id))
 end
 
+-- Remote working directory as reported by the shell (OSC 7) or shown in a
+-- "user@host: path" title; "" until known.
+function Core.cwd(id)
+  return str(lib.cbo_term_cwd(id))
+end
+
 function Core.takeBell(id)
   return tonumber(lib.cbo_term_take_bell(id))
 end

@@ -411,6 +411,17 @@ pub extern "C" fn cbo_term_title(id: i32) -> *const c_char {
 }
 
 #[no_mangle]
+pub extern "C" fn cbo_term_cwd(id: i32) -> *const c_char {
+    guard(std::ptr::null(), || match session::get(id) {
+        Some(s) => {
+            let cwd = s.term().cwd();
+            ret_str(&cwd)
+        }
+        None => ret_str(""),
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn cbo_term_take_bell(id: i32) -> i32 {
     guard(0, || {
         session::get(id)

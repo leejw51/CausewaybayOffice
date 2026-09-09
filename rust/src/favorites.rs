@@ -29,6 +29,7 @@ pub fn save_named(dir: &Path, name: &str, text: &str) -> Result<(), String> {
             "platform",
             "label",
             "name",
+            "cwd",
         ] {
             if let Some(value) = h.get(key) {
                 safe.insert(key.into(), value.clone());
@@ -104,6 +105,11 @@ mod tests {
         assert_eq!(text.lines().count(), 1);
         assert!(!text.contains("password"));
         assert!(super::load(&dir).unwrap().unwrap().contains("香港"));
+        // sessions keep the remote working directory; secrets still never land
+        super::save_named(&dir, "sessions", r#"{"hosts":[{"host":"localhost","user":"u","port":22,"name":"mary-1","cwd":"/srv/app","password":"x"}]}"#).unwrap();
+        let text = std::fs::read_to_string(dir.join("sessions.jsonl")).unwrap();
+        assert!(text.contains(r#""cwd":"/srv/app""#) && text.contains(r#""connected":true"#));
+        assert!(!text.contains("password"));
         super::save(&dir, r#"{"hosts":[]}"#).unwrap();
         assert_eq!(super::load(&dir).unwrap().unwrap(), r#"{"hosts":[]}"#);
         std::fs::remove_dir_all(dir).unwrap();

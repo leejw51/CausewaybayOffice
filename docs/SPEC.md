@@ -144,6 +144,10 @@ of terminal recording and remote indexing consent.
 Latest interaction requirements supersede earlier reconnect/name notes: successfully
 connected sessions are saved to sessions.jsonl and automatically restored on startup,
 with separate records for duplicate addresses. Explicitly closed sessions are removed.
+Each record also keeps the remote working directory (`cwd`): the core reports it from
+OSC 7 or a `user@host: path` title (`cbo_term_cwd`), Lua saves it per session and per
+host (`cwd.<user>@<host>:<port>` in settings), and the next connection to that session or
+host types a quoted `cd` once the screen has been quiet after the first prompt.
 New UI names follow mary-1, john-2, etc.; custom names persist. Tests cover 100 sessions
 in the UI/restore model within the existing 128-slot core.
 

@@ -1680,6 +1680,40 @@ function M.run(App)
       return saved or ""
     end
     Sessions.persistSessions = true
+    -- Remembered directory: a restored session types `cd` back to where it
+    -- was once the prompt has settled, then keeps following the shell.
+    saved = require("src.json").encode({
+      hosts = { { host = "localhost", user = "test", name = "dir-1", cwd = "/srv/app" } },
+    })
+    Sessions.restore(80, 24)
+    local dirRec = Sessions.list[1]
+    check(
+      "restore carries the saved directory",
+      dirRec and dirRec.wantCwd == "/srv/app" and dirRec.cwd == "/srv/app"
+    )
+    Core.update(2)
+    Sessions.update(0.1)
+    check("cd waits for the screen to settle", dirRec.wantCwd == "/srv/app")
+    Sessions.update(0.5)
+    check(
+      "cd typed once the prompt is quiet",
+      dirRec.wantCwd == nil and Core.cwd(dirRec.id) == "/srv/app"
+    )
+    Core.write(dirRec.id, "cd logs\n")
+    Sessions.update(0.1)
+    check(
+      "new directory saved for the next start",
+      dirRec.cwd == "/srv/app/logs" and saved:find("/srv/app/logs", 1, true) ~= nil
+    )
+    check(
+      "cd quoting keeps spaces, quotes and a leading tilde",
+      Sessions.cdCommand("/a b's") == " cd '/a b'\\''s'\n"
+        and Sessions.cdCommand("~/x y") == " cd ~/'x y'\n"
+        and Sessions.cdCommand("~") == " cd ~\n"
+        and Sessions.cdCommand("") == nil
+    )
+    mock.reset()
+    Sessions.list, Sessions.byId, saved = {}, {}, nil
     for _ = 1, 100 do
       Sessions.open({ host = "localhost", user = "test", noRemember = true })
     end

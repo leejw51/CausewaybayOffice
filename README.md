@@ -177,6 +177,11 @@ settings and AI prompts. Current names/settings stay visible when editing them.
 Passwords and API keys are excluded from learned input. Field history stays local,
 separate from optional terminal recording and OpenAI indexing.
 
+The remote working directory is remembered too. When the shell reports it
+(OSC 7, or the `user@host: ~/dir` title that Debian and Ubuntu bash set), the
+last directory is saved per session and per host, and the next connection
+types a `cd` back to it as soon as the prompt appears.
+
 Under `~/.causewaybayoffice/` (or `CBO_HOME`):
 
 * `office.db`: settings, field drafts/history, favorites cache and optional recordings.

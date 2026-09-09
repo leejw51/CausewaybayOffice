@@ -70,6 +70,7 @@ uint64_t    cbo_term_generation(int32_t id);
 int32_t     cbo_term_bracketed_paste(int32_t id); /* remote enabled DECSET 2004 */
 void        cbo_term_cursor(int32_t id, uint16_t* x, uint16_t* y, uint8_t* visible);
 const char* cbo_term_title(int32_t id);      /* OSC 0/2 title, "" if none */
+const char* cbo_term_cwd(int32_t id);        /* remote cwd: OSC 7, else a "user@host: path" title; "" if unknown */
 int32_t     cbo_term_take_bell(int32_t id);  /* returns bell count since last call */
 /* scrollback: 0 = live screen, n = n lines up. */
 void        cbo_term_scroll(int32_t id, int32_t offset);
