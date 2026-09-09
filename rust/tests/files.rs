@@ -56,11 +56,44 @@ fn sftp_roundtrip_and_shell_cwd_without_test_hook() {
         );
         std::thread::sleep(Duration::from_millis(30));
     }
+    cbo_term_take_bell(id);
+    write(id, "ls; printf '\\nCBO_LS_QUIET\\n'\n");
+    assert!(wait_row(id, 100, 24, Duration::from_secs(5), |s| s == "CBO_LS_QUIET").is_some());
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        cbo_term_take_bell(id),
+        0,
+        "ls and the shell's prompt reports must not ring"
+    );
     let local = job(id, json!({"op":"local", "local":root}));
     assert_eq!(local["state"], "done", "{local}");
     let upload = job(id, json!({"op":"upload", "local":source, "remote":remote}));
     assert_eq!(upload["state"], "done", "{upload}");
     assert_eq!(upload["done"], bytes.len(), "{upload}");
+    // Folder detection is independent of the transfer job and follows links.
+    for (path, is_dir) in [(&root, true), (&source, false)] {
+        assert_eq!(
+            unsafe { cbo_files_probe(id, cs(path.to_str().unwrap()).as_ptr()) },
+            0
+        );
+        let begin = Instant::now();
+        loop {
+            let st: Value = serde_json::from_str(&from_c(cbo_files_probe_status(id))).unwrap();
+            if st["state"] != "running" {
+                assert_eq!(st["state"], "done", "{st}");
+                assert_eq!(st["result"]["dir"], is_dir, "{st}");
+                break;
+            }
+            assert!(begin.elapsed() < Duration::from_secs(20));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let transfer: Value = serde_json::from_str(&from_c(cbo_files_status(id))).unwrap();
+        assert_eq!(
+            transfer["op"], "upload",
+            "folder lookup must not consume transfer status"
+        );
+    }
+
     let list = job(id, json!({"op":"list", "remote":root}));
     assert_eq!(list["state"], "done", "{list}");
     assert!(list["result"]["entries"]

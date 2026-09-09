@@ -222,6 +222,19 @@ function Core.cwd(id)
   return str(lib.cbo_term_cwd(id))
 end
 
+function Core.probePath(id, path)
+  if Core.mock then
+    return false
+  end
+  return lib.cbo_files_probe(id, path) == 0
+end
+function Core.probeStatus(id)
+  if Core.mock then
+    return {}
+  end
+  return require("src.json").decode(str(lib.cbo_files_probe_status(id))) or {}
+end
+
 function Core.filesStart(id, request)
   if Core.mock then
     return false, "File transfers require a real SSH session"

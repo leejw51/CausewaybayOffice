@@ -77,6 +77,10 @@ const char* cbo_term_cwd(int32_t id);        /* remote cwd: OSC 7, else a "user@
  * One job at a time; start: 0 / -1 + last_error. Status JSON: state
  * running/done/error/cancelled, op, done/total bytes, result or error.
  * Existing destination files are never overwritten. */
+/* Independent read-only stat for terminal links; result contains path, dir,
+ * file. Does not replace or block the session's upload/download job. */
+int32_t cbo_files_probe(int32_t id, const char *path);
+const char *cbo_files_probe_status(int32_t id);
 int32_t cbo_files_start(int32_t id, const char *request);
 const char *cbo_files_status(int32_t id);
 void cbo_files_cancel(int32_t id);

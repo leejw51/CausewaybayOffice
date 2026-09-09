@@ -177,7 +177,7 @@ impl Term {
 
     /// Feed raw bytes from the remote side. Kitty graphics sequences are
     /// split out and handled here; the rest goes to the VT parser in order.
-    /// Bumps the generation counter and counts BEL bytes.
+    /// Bumps the generation counter and counts parsed audible bell events.
     pub fn process(&mut self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
@@ -195,12 +195,20 @@ impl Term {
     }
 
     fn feed_text(&mut self, t: &[u8]) {
-        self.bells += t.iter().filter(|&&b| b == 0x07).count() as u32;
+        let bells_before = self.parser.screen().audible_bell_count();
         let before_len = self.scrollback_len() as i64;
         let (rows, _) = self.parser.screen().size();
         let (row_before, _) = self.parser.screen().cursor_position();
         let alt_before = self.parser.screen().alternate_screen();
         self.parser.process(t);
+        let bells = self
+            .parser
+            .screen()
+            .audible_bell_count()
+            .wrapping_sub(bells_before);
+        self.bells = self
+            .bells
+            .saturating_add(bells.min(u32::MAX as usize) as u32);
         let after_len = self.scrollback_len() as i64;
         if after_len < before_len {
             // scrollback was cleared: keep absolute lines monotonic
@@ -636,6 +644,33 @@ mod tests {
         // OSC 7 wins over the title once seen
         t.process(b"\x1b]7;file:///tmp\x07\x1b]0;alice@box: ~\x07");
         assert_eq!(t.cwd(), "/tmp");
+    }
+
+    #[test]
+    fn osc_terminators_are_not_audible_bells() {
+        let mut t = Term::new(80, 24);
+        // Shell cwd/title reports run after every command, including ls.
+        for bytes in [
+            b"\x1b]7;file://host/tmp\x07".as_slice(),
+            b"\x1b]0;user@host: /tmp\x07",
+            b"\x1b]2;title\x1b\\",
+        ] {
+            for byte in bytes {
+                t.process(&[*byte]);
+            }
+        }
+        assert_eq!(t.cwd(), "/tmp");
+        assert_eq!(
+            t.take_bell(),
+            0,
+            "OSC terminators must stay silent across split reads"
+        );
+        t.process(b"\x07\x1b]7;file://host/var\x07\x07");
+        assert_eq!(
+            t.take_bell(),
+            2,
+            "explicit BEL still rings around shell reports"
+        );
     }
 
     #[test]

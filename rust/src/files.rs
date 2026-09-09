@@ -26,12 +26,30 @@ struct Job {
     state: Mutex<Value>,
 }
 static JOBS: OnceLock<Mutex<HashMap<i32, Arc<Job>>>> = OnceLock::new();
+static PROBES: OnceLock<Mutex<HashMap<i32, Arc<Job>>>> = OnceLock::new();
 fn jobs() -> &'static Mutex<HashMap<i32, Arc<Job>>> {
     JOBS.get_or_init(Default::default)
 }
+pub fn probe(id: i32, path: &str) -> Result<(), String> {
+    start_in(
+        id,
+        &json!({"op":"stat", "remote":path}).to_string(),
+        PROBES.get_or_init(Default::default),
+    )
+}
+pub fn probe_status(id: i32) -> String {
+    status_in(id, PROBES.get_or_init(Default::default))
+}
 pub fn start(id: i32, request: &str) -> Result<(), String> {
+    start_in(id, request, jobs())
+}
+fn start_in(
+    id: i32,
+    request: &str,
+    registry: &Mutex<HashMap<i32, Arc<Job>>>,
+) -> Result<(), String> {
     let req: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
-    if !["pick", "local", "list", "upload", "download"].contains(&req.op.as_str()) {
+    if !["pick", "local", "list", "stat", "upload", "download"].contains(&req.op.as_str()) {
         return Err("Unknown file operation".into());
     }
     if req.local.contains('\0') || req.remote.contains('\0') {
@@ -41,7 +59,7 @@ pub fn start(id: i32, request: &str) -> Result<(), String> {
     if !["local", "pick"].contains(&req.op.as_str()) && sess.state() != ST_CONNECTED {
         return Err("Connect the terminal first".into());
     }
-    let mut all = lock(jobs());
+    let mut all = lock(registry);
     all.retain(|id, job| {
         let keep = session::get(*id).is_some_and(|s| Arc::ptr_eq(&s, &job.owner));
         if !keep {
@@ -91,7 +109,10 @@ pub fn start(id: i32, request: &str) -> Result<(), String> {
     Ok(())
 }
 pub fn status(id: i32) -> String {
-    let all = lock(jobs());
+    status_in(id, jobs())
+}
+fn status_in(id: i32, registry: &Mutex<HashMap<i32, Arc<Job>>>) -> String {
+    let all = lock(registry);
     all.get(&id)
         .filter(|j| session::get(id).is_some_and(|s| Arc::ptr_eq(&s, &j.owner)))
         .map(|j| lock(&j.state).to_string())
@@ -193,6 +214,11 @@ fn run(job: &Job, req: &Request) -> Result<Value, String> {
     check(job)?;
     let sftp = ssh.sftp().map_err(|e| format!("SFTP unavailable: {e}"))?;
     let remote = remote_path(&sftp, &req.remote)?;
+    if req.op == "stat" {
+        check(job)?;
+        let meta = sftp.stat(&remote).map_err(|e| e.to_string())?;
+        return Ok(json!({"path":remote, "dir":meta.is_dir(), "file":meta.is_file()}));
+    }
     if req.op == "list" {
         let path = sftp.realpath(&remote).map_err(|e| e.to_string())?;
         let mut rows = Vec::new();

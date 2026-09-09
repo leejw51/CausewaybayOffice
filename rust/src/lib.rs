@@ -1194,6 +1194,24 @@ pub extern "C" fn cbo_predict_next(host_id: i32, limit: i32) -> *const c_char {
     })
 }
 
+/// Start an independent, read-only path check for terminal folder clicks.
+/// # Safety
+/// `path` is NULL or a valid NUL-terminated UTF-8 path.
+#[no_mangle]
+pub unsafe extern "C" fn cbo_files_probe(id: i32, path: *const c_char) -> i32 {
+    guard(-1, || match files::probe(id, cstr(path).unwrap_or("")) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    })
+}
+#[no_mangle]
+pub extern "C" fn cbo_files_probe_status(id: i32) -> *const c_char {
+    guard(std::ptr::null(), || ret_str(&files::probe_status(id)))
+}
+
 // ---- file browser / transfers -----------------------------------------------
 /// # Safety
 /// `request` is NULL or a valid NUL-terminated UTF-8 JSON string.

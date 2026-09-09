@@ -301,6 +301,86 @@ function M.run(App, phase)
     return
   end
 
+  if phase == "folders" then
+    local rec, base
+    local child = "my project's 한글"
+    at(0.5, function()
+      love.filesystem.createDirectory("folder-click/" .. child)
+      base = love.filesystem.getSaveDirectory() .. "/folder-click"
+      rec = App.sessions.open({
+        host = "localhost",
+        user = os.getenv("USER") or "dev",
+        name = "folder-check",
+      })
+    end)
+    at(3.5, function()
+      App.switch("terminal", { id = rec.id })
+    end)
+    at(0.8, function()
+      App.core.write(rec.id, App.sessions.cdCommand(base) .. "ls -l\n")
+    end)
+    at(1.0, function()
+      local sc = App.scene
+      local tv = sc:view()
+      local clicked = false
+      for row = 0, tv.rows - 1 do
+        local text = tv:rowText(row, 0, tv.cols - 1)
+        if text:match("^d[rwx%-]") and text:find("my project", 1, true) then
+          local col
+          for x = 0, tv.cols - 1 do
+            local token = require("src.terminal_files").at(tv, x, row)
+            if token and token.literal == child then
+              col = x
+              break
+            end
+          end
+          if col then
+            local mx = (sc.px + (col + 0.5) * 8 * sc.zoom) / D.s
+            local my = (sc.py + (row + 0.5) * 16 * sc.zoom) / D.s
+            sc:mousepressed(mx, my, 1)
+            sc:mousereleased(mx, my, 1)
+            clicked = true
+            break
+          end
+        end
+      end
+      check(
+        "plain click checks a directory name with spaces and quotes",
+        clicked and sc.folderProbe ~= nil
+      )
+    end)
+    at(1.5, function()
+      check(
+        "folder click changed the real SSH shell cwd",
+        App.core.cwd(rec.id) == base .. "/" .. child,
+        App.core.cwd(rec.id)
+      )
+      check("folder bar follows automatic cd", App.scene.displayedFolder == App.core.cwd(rec.id))
+      shot("qa_folder_click")
+    end)
+    at(0.2, function()
+      local found = false
+      for _, b in ipairs(App.scene.buttons) do
+        if b.id == "parentFolder" then
+          b.fn()
+          found = true
+          break
+        end
+      end
+      check("cd .. button is available", found)
+    end)
+    at(1.0, function()
+      check(
+        "cd .. returned the real shell to its parent",
+        App.core.cwd(rec.id) == base,
+        App.core.cwd(rec.id)
+      )
+      shot("qa_folder_parent")
+    end)
+    finish(0.4)
+    return
+  end
+
   if phase == "files" then
     local rec, panel
     at(0.5, function()

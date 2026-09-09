@@ -105,6 +105,71 @@ function Term:fileTarget(mx, my)
   local token = Paths.at(tv, cx, cy)
   return token and token.name or nil
 end
+-- Navigate only at an empty, recognized prompt. A path check may take a
+-- moment; any intervening input/output invalidates the original click.
+function Term:canNavigate()
+  local core = self.app.core
+  return core.canComplete(self.id) and core.typing(self.id) == "" and core.cwd(self.id) ~= ""
+end
+function Term:changeFolder(path)
+  if not self:canNavigate() then
+    self.app.toast("Finish the current command before changing folders")
+    return false
+  end
+  local command = require("src.sessions").cdCommand(path)
+  if not command then
+    return false
+  end
+  self:write(command)
+  self:view().sel = nil
+  return true
+end
+function Term:parentFolder()
+  local path = require("src.terminal_files").resolveLiteral(self.app.core.cwd(self.id), "..")
+  if path then
+    self:changeFolder(path)
+  end
+end
+function Term:probeFolder(click)
+  local core = self.app.core
+  if
+    not click
+    or self.folderProbe
+    or not self:canNavigate()
+    or click.gen ~= core.generation(self.id)
+    or click.cwd ~= core.cwd(self.id)
+  then
+    return
+  end
+  local path = require("src.terminal_files").resolveLiteral(click.cwd, click.name)
+  if path and core.probePath(self.id, path) then
+    self.folderProbe = { path = path, gen = click.gen, cwd = click.cwd }
+  end
+end
+function Term:updateFolderProbe()
+  local pending, core = self.folderProbe, self.app.core
+  if not pending then
+    return
+  end
+  if
+    not self:canNavigate()
+    or pending.gen ~= core.generation(self.id)
+    or pending.cwd ~= core.cwd(self.id)
+  then
+    self.folderProbe = nil
+    return
+  end
+  local st = core.probeStatus(self.id)
+  if not st.state or st.state == "running" then
+    return
+  end
+  self.folderProbe = nil
+  -- Files, missing paths and ordinary output words remain normal text.
+  if st.state == "done" and st.result and st.result.dir then
+    self:changeFolder(pending.path)
+  end
+end
+
 function Term:resetFileCursor()
   if self.fileCursorActive then
     love.mouse.setCursor()
@@ -214,6 +279,7 @@ function Term:openMenu(mx, my)
 end
 
 function Term:leave()
+  self.folderProbe, self.folderClick = nil, nil
   self.downloadPicking = false
   self:resetFileCursor()
   if self.ai then
@@ -367,6 +433,7 @@ function Term:view()
 end
 
 function Term:cycle(dir)
+  self.folderProbe, self.folderClick = nil, nil
   self.downloadPicking = false
   self:resetFileCursor()
   local app = self.app
@@ -441,6 +508,7 @@ function Term:update(dt)
     end
     return
   end
+  self:updateFolderProbe()
   self.assistAge = (self.assistAge or 0) + dt
   if self.assistAge >= 0.12 then
     self.assistAge = 0
@@ -503,6 +571,7 @@ function Term:acceptCompletion()
 end
 
 function Term:write(bytes)
+  self.folderProbe, self.folderClick = nil, nil
   self.app.core.write(self.id, bytes)
   if self.app.core.scrollOffset(self.id) ~= 0 then
     self.app.core.scroll(self.id, 0)
@@ -519,6 +588,7 @@ function Term:acceptsWithRight(key, m)
 end
 
 function Term:keypressed(key, m)
+  self.folderProbe, self.folderClick = nil, nil
   if key == "escape" and self.downloadPicking then
     self.downloadPicking = false
     self:resetFileCursor()
@@ -723,6 +793,16 @@ function Term:mousepressed(mx, my, b)
   end
   local tv = self:view()
   local cx, cy = self:cellAt(mx, my)
+  local token = require("src.terminal_files").at(tv, cx, cy)
+  self.folderClick = token
+      and {
+        name = token.literal or token.name,
+        gen = tv.gen or self.app.core.generation(self.id),
+        cwd = self.app.core.cwd(self.id),
+        mx = mx,
+        my = my,
+      }
+    or nil
   tv.sel = { x0 = cx, y0 = cy, x1 = cx, y1 = cy }
   self.dragging = true
 end
@@ -751,6 +831,12 @@ function Term:updateHover(mx, my)
 end
 
 function Term:mousemoved(mx, my)
+  if
+    self.folderClick
+    and (math.abs(mx - self.folderClick.mx) > 2 or math.abs(my - self.folderClick.my) > 2)
+  then
+    self.folderClick = nil
+  end
   self:updateHover(mx, my)
   if self.dragging then
     local tv = self:view()
@@ -759,14 +845,19 @@ function Term:mousemoved(mx, my)
   end
 end
 
-function Term:mousereleased()
+function Term:mousereleased(mx, my)
   if self.dragging then
     self.dragging = false
     local tv = self:view()
     local s = tv.sel
     if s and s.x0 == s.x1 and s.y0 == s.y1 then
       tv.sel = nil
+      local click = self.folderClick
+      if click and (not mx or (math.abs(mx - click.mx) <= 2 and math.abs(my - click.my) <= 2)) then
+        self:probeFolder(click)
+      end
     end
+    self.folderClick = nil
   end
 end
 
@@ -798,7 +889,8 @@ function Term:drawFileLink(tv, zoom)
   end
   local cx, cy = self:cellAt(mx, my)
   local token = require("src.terminal_files").at(tv, cx, cy)
-  if self.downloadPicking then
+  local folderLink = token and token.directory and self:canNavigate()
+  if self.downloadPicking or folderLink then
     local kind = token and "hand" or "crosshair"
     self.fileCursors = self.fileCursors or {}
     self.fileCursors[kind] = self.fileCursors[kind] or love.mouse.getSystemCursor(kind)
@@ -813,9 +905,15 @@ function Term:drawFileLink(tv, zoom)
   if not token then
     return
   end
-  self.fileHint = (self.downloadPicking and "Click to download " or "Cmd/Ctrl+click: download ")
-    .. token.name
-  if self.downloadPicking or love.keyboard.isDown("lgui", "rgui", "lctrl", "rctrl") then
+  self.fileHint = (
+    self.downloadPicking and "Click to download "
+    or (folderLink and "Click to cd: " or "Click folder: cd / Cmd+click file: download ")
+  ) .. token.name
+  if
+    self.downloadPicking
+    or folderLink
+    or love.keyboard.isDown("lgui", "rgui", "lctrl", "rctrl")
+  then
     self.app.G.color("cyan")
     love.graphics.rectangle(
       "fill",
@@ -876,7 +974,9 @@ function Term:drawFolderBar(y)
     return
   end
   local copyW = G.uiWidth("COPY") + 12
-  local room = vw - copyW - 16 - px
+  local upW = G.uiWidth("cd ..") + 12
+  local upX = vw - copyW - upW - 8
+  local room = upX - 8 - px
   local shown = path:gsub("[%z\1-\31\127]", "?")
   local shortened = false
   while #shown > 0 and G.uiWidth((shortened and "…" or "") .. shown) > room do
@@ -884,19 +984,34 @@ function Term:drawFolderBar(y)
     shortened = true
   end
   G.ui((shortened and "…" or "") .. shown, px, y + 4, "cyan")
+  G.panel(upX, y + 1, upW, CWD_H - 2, "ink", "cyan")
+  G.ui("cd ..", upX + 6, y + 4, "yellow")
+  self.buttons[#self.buttons + 1] = {
+    id = "parentFolder",
+    x = upX,
+    y = y,
+    w = upW,
+    h = CWD_H,
+    fn = function()
+      self:parentFolder()
+    end,
+  }
   G.panel(vw - copyW - 4, y + 1, copyW, CWD_H - 2, "ink", "cyan")
   G.ui("COPY", vw - copyW + 2, y + 4, "yellow")
   self.buttons[#self.buttons + 1] = {
     id = "folder",
     x = px,
     y = y,
-    w = vw - px - 4,
+    w = upX - px - 4,
     h = CWD_H,
     fn = function()
       love.system.setClipboardText(path)
       app.toast("Folder path copied")
     end,
   }
+  local copy = self.buttons[#self.buttons].fn
+  self.buttons[#self.buttons + 1] =
+    { id = "copyFolder", x = vw - copyW - 4, y = y, w = copyW, h = CWD_H, fn = copy }
 end
 
 function Term:drawTabStrip(rec)

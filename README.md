@@ -185,7 +185,11 @@ Other shells can report OSC 7 or a `user@host: ~/dir` title. Missing directories
 produce the shell's normal error.
 
 The terminal shows the current folder beneath the toolbar, updating as you change
-directories. Click the path or COPY to copy the full folder path.
+directories. Click the path or COPY to copy the full folder path. **cd ..** moves
+to its parent. Click a folder name in terminal output to enter it automatically;
+plain names, quoted names and standard `ls -l` directory names work. The app checks
+that it is a directory first. Dragging still selects text, and navigation waits
+for an empty shell prompt; typing or new output cancels a pending folder check.
 
 ### Upload and download
 

@@ -2035,6 +2035,106 @@ function M.run(App)
     check("DOWNLOAD toggles picking off again", not sc.downloadPicking)
   end
 
+  do
+    local Term = require("src.scenes.terminal")
+    local Paths = require("src.terminal_files")
+    local cwd, gen, typed, ready = "/srv/work", 12, "", true
+    local probed, written
+    local status = { state = "done", result = { dir = true } }
+    local app = {
+      toast = function() end,
+      core = {
+        cwd = function()
+          return cwd
+        end,
+        generation = function()
+          return gen
+        end,
+        typing = function()
+          return typed
+        end,
+        canComplete = function()
+          return ready
+        end,
+        probePath = function(_, path)
+          probed = path
+          return true
+        end,
+        probeStatus = function()
+          return status
+        end,
+      },
+    }
+    local sc = Term.new(app, { id = 2 })
+    sc.view = function()
+      return {}
+    end
+    sc.write = function(_, cmd)
+      written = cmd
+    end
+    sc:probeFolder({ name = "my project's 한글", gen = gen, cwd = cwd })
+    check(
+      "folder click resolves its literal path before checking",
+      probed == "/srv/work/my project's 한글"
+    )
+    sc:updateFolderProbe()
+    check("verified folder click sends one safely quoted cd", written == Sessions.cdCommand(probed))
+    written = nil
+    status.result.dir = false
+    sc:probeFolder({ name = "report.txt", gen = gen, cwd = cwd })
+    sc:updateFolderProbe()
+    check("ordinary file clicks never send shell commands", written == nil)
+    status.result.dir = true
+    sc:probeFolder({ name = "subdir", gen = gen, cwd = cwd })
+    gen = gen + 1
+    sc:updateFolderProbe()
+    check(
+      "folder check is discarded if terminal changes while waiting",
+      written == nil and not sc.folderProbe
+    )
+    sc:probeFolder({ name = "subdir", gen = gen, cwd = cwd })
+    typed = "unfinished"
+    sc:updateFolderProbe()
+    sc:parentFolder()
+    check(
+      "folder navigation never appends to unfinished input",
+      written == nil and not sc.folderProbe
+    )
+    typed = ""
+    ready = false
+    sc:parentFolder()
+    check("folder navigation refuses a busy or alternate-screen prompt", written == nil)
+    ready = true
+    sc:parentFolder()
+    check("cd parent button uses the current folder", written == Sessions.cdCommand("/srv/work/.."))
+    check(
+      "folder resolution preserves colon-number names",
+      Paths.resolveLiteral(cwd, "release:12") == "/srv/work/release:12"
+    )
+    check(
+      "folder resolution refuses command control characters",
+      Paths.resolveLiteral(cwd, "bad\nfolder") == nil
+    )
+    local line = "drwxr-xr-x 2 user group 4096 Sep 9 12:30 my project's folder"
+    local cells = {}
+    for i = 1, #line do
+      cells[i - 1] = { cp = line:byte(i), width = 1 }
+    end
+    local token = Paths.at({ cells = cells, cols = #line, rows = 1 }, #line - 3, 0)
+    check(
+      "long ls directory names keep unquoted spaces",
+      token and token.directory and token.literal == "my project's folder"
+    )
+    for i = #line, #line + 30 do
+      cells[i] = { cp = 32, width = 1 }
+    end
+    token = Paths.at({ cells = cells, cols = #line + 31, rows = 1 }, #line - 3, 0)
+    check(
+      "literal apostrophes never include terminal row padding in a folder path",
+      token and token.literal == "my project's folder" and token.last == #line - 1
+    )
+  end
+
   if fails == 0 then
     print("OK " .. n .. " tests")
     return true
