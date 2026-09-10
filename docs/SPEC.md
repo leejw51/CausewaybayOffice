@@ -84,6 +84,7 @@ OPENAI_API_KEY / ANTHROPIC_API_KEY / XAI_API_KEY (GROK_API_KEY alias).
 ## Game feel
 
 * Boot: CRT power-on flash, logo fades in (expo-out), Causeway Bay skyline parallax.
+  The title waits for Space: no timer, no click, no other key (2026-09-10).
 * Lobby: session cards on a shelf; new card slides in (expo-out), close pops out (expo-in).
   Cards pulse with the keepalive heartbeat; disconnected cards flicker red.
 * Terminal: cool-retro-term style screen (`fx.retro`, Settings "CRT phosphor fx" or the

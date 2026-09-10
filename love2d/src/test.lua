@@ -1087,6 +1087,38 @@ function M.run(App)
       "Esc leaves FIND and keeps the panel",
       notesPanel:cancel() and not notesPanel.finding and notesPanel.hits[1] == nil
     )
+    notesPanel:draw(0, 0, 300, 300, 0)
+    notesPanel.headerBtns[2].fn() -- CHAT (drawn right to left after FIND)
+    check(
+      "CHAT header button returns to chat",
+      notesPanel.mode == "chat" and notesPanel.input == notesPanel.chatInput
+    )
+    notesPanel:draw(0, 0, 300, 300, 0)
+    notesPanel.headerBtns[1].fn() -- NOTES
+    check("NOTES header button returns to notes", notesPanel.mode == "notes")
+    -- no key and no mock: AUTO NOTE saves the raw capture at once
+    local Config2 = require("src.config")
+    local origKey = Config2.apiKey
+    Config2.apiKey = function()
+      return ""
+    end
+    -- a proxy app whose core reports "not mock" while still calling the mock
+    local realApp = notesPanel.app
+    notesPanel.app = setmetatable(
+      { core = setmetatable({ mock = false }, { __index = realApp.core }) },
+      { __index = realApp }
+    )
+    local rawCount = #notesPanel.notes
+    local raw = notesPanel:autoNote("$ uptime\nup 3 days", "AUTO NOTE raw")
+    notesPanel.app = realApp
+    Config2.apiKey = origKey
+    check(
+      "auto note without a key saves header + capture directly",
+      type(raw) == "table"
+        and not notesPanel.auto
+        and #notesPanel.notes == rawCount + 1
+        and notesPanel.notes[#notesPanel.notes].text == "AUTO NOTE raw\n$ uptime\nup 3 days"
+    )
     -- the chat sees the notes
     local originalStart = Core.llmStart
     local started
@@ -1138,7 +1170,7 @@ function M.run(App)
     App.pop = origPop
     check(
       "note reader D deletes through the panel",
-      popped and #notesPanel.notes == 1 and #Core.noteList(10) == 1
+      popped and #notesPanel.notes == 2 and #Core.noteList(10) == 2
     )
     -- auto note: mock streams a summary, the note carries header + summary + capture
     notesPanel.mode = "chat"
@@ -1351,6 +1383,13 @@ function M.run(App)
     )
     check("editor text round trip uses the file's line ending", e:text() == "x\r\nya한글cd\r\n")
     check("editor empty text is one line", #E.new("").lines == 1 and E.new(""):text() == "")
+    check(
+      "saved text ends with one newline",
+      HotNote.finalText(E.new("apple1\napple2")) == "apple1\napple2\n"
+        and HotNote.finalText(E.new("a\r\nb")) == "a\r\nb\r\n"
+        and HotNote.finalText(E.new("done\n")) == "done\n"
+        and HotNote.finalText(E.new("")) == ""
+    )
 
     -- overlay: fake core file jobs
     local status, requests = {}, {}
@@ -1455,6 +1494,55 @@ function M.run(App)
     local failed = HotNote.new(fakeApp, { id = 3, remote = "/x" })
     check("download start failure is shown", failed.state == "error" and failed.error == "busy")
     failed:draw()
+    -- more refusals and controls
+    fakeCore.filesStart = function(_, req)
+      requests[#requests + 1] = req
+      status = { state = "running", op = req.op }
+      return true
+    end
+    local big = HotNote.new(fakeApp, { id = 3, remote = "/srv/app/big.log" })
+    local bfile = assert(io.open(requests[#requests]["local"], "wb"))
+    bfile:write(string.rep("x", HotNote.MAX_BYTES + 1))
+    bfile:close()
+    status = { state = "done", op = "download" }
+    big:update(0.016)
+    check(
+      "files over the size limit are refused",
+      big.state == "error" and big.error:find("larger")
+    )
+    os.remove(requests[#requests]["local"])
+    local latin = HotNote.new(fakeApp, { id = 3, remote = "/srv/app/latin1.txt" })
+    local lfile = assert(io.open(requests[#requests]["local"], "wb"))
+    lfile:write("caf\233")
+    lfile:close()
+    status = { state = "done", op = "download" }
+    latin:update(0.016)
+    check("invalid UTF-8 is refused", latin.state == "error" and latin.error:find("UTF%-8"))
+    os.remove(requests[#requests]["local"])
+    local cancelled = false
+    fakeCore.filesCancel = function()
+      cancelled = true
+      status = { state = "cancelled" }
+    end
+    popped = nil
+    local mid = HotNote.new(fakeApp, { id = 3, remote = "/srv/app/slow.txt" })
+    mid:keypressed("escape", none)
+    check("Esc during the download cancels the job and closes", cancelled and popped == mid)
+    local ed =
+      HotNote.new(fakeApp, { id = 3, remote = "/srv/app/x.txt", text = "one\ttab\nline two" })
+    ed:draw()
+    local box = ed.textBox
+    ed:mousepressed(box[1] + 2 * ed.charW, box[2] + 16 + 4, 1)
+    check("click places the cursor", ed.editor.row == 2 and ed.editor.col == 2)
+    ed:keypressed("tab", none)
+    check(
+      "Tab inserts a real tab kept in the text",
+      ed.editor:line(2) == "li\tne two" and HotNote.finalText(ed.editor):find("\t", 1, true)
+    )
+    popped = nil
+    local before = #requests
+    ed:discard()
+    check("DISCARD closes a changed file without an upload", popped == ed and #requests == before)
     -- terminal picking
     local Term = require("src.scenes.terminal")
     local pushed
@@ -1582,12 +1670,62 @@ function M.run(App)
     )
     os.remove(requests[2]["local"])
     local nf = assert(io.open(requests[1]["local"], "rb"))
-    check("new file body was written locally", nf:read("*a") == "- buy tram tickets")
+    check(
+      "new file body was written locally with a final newline",
+      nf:read("*a") == "- buy tram tickets\n"
+    )
     nf:close()
     os.remove(requests[1]["local"])
     status = { state = "done", op = "upload" }
     nn:update(0.016)
     check("new note upload closes the editor", popped == nn and nn.uploaded)
+    -- context menu carries the note actions
+    local menu
+    app2.push = function(name, params)
+      if name == "menu" then
+        menu = params
+      end
+      pushed = { name = name, params = params }
+    end
+    sc:openMenu(12, 20)
+    local labels = {}
+    for _, it in ipairs(menu.items) do
+      labels[#labels + 1] = it[1]
+    end
+    local joined = table.concat(labels, "|")
+    check(
+      "right-click menu offers hot note, new note, auto note and rename",
+      joined:find("Hot note: edit config.yml", 1, true)
+        and joined:find("New note", 1, true)
+        and joined:find("Auto note", 1, true)
+        and joined:find("Rename", 1, true)
+    )
+    for _, it in ipairs(menu.items) do
+      if it[1]:find("Hot note", 1, true) then
+        it[2]()
+      end
+    end
+    check(
+      "menu hot note opens the editor on the clicked file",
+      pushed.name == "hotnote" and pushed.params.remote == "/srv/app/config.yml"
+    )
+  end
+
+  -- title screen: only Space moves on
+  do
+    local Boot = require("src.scenes.boot")
+    local b = Boot.new(App)
+    local advanced = 0
+    b.advance = function()
+      advanced = advanced + 1
+    end
+    b:keypressed("a")
+    b:keypressed("return")
+    b:mousepressed(10, 10, 1)
+    b:update(10)
+    check("title ignores other keys, clicks and time", advanced == 0)
+    b:keypressed("space")
+    check("title leaves on Space", advanced == 1)
   end
 
   -- session limit

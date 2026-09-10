@@ -228,12 +228,23 @@ function HotNote:loadLocal()
   return true
 end
 
+-- Text files end with a newline (POSIX; vim does the same), so `cat` and
+-- zsh do not show a dangling partial line. An empty file stays empty.
+function HotNote.finalText(editor)
+  local text = editor:text()
+  local eol = editor.crlf and "\r\n" or "\n"
+  if text ~= "" and text:sub(-#eol) ~= eol then
+    text = text .. eol
+  end
+  return text
+end
+
 function HotNote:writeLocal()
   local f, err = io.open(self.localPath, "wb")
   if not f then
     return false, err
   end
-  f:write(self.editor:text())
+  f:write(HotNote.finalText(self.editor))
   f:close()
   return true
 end

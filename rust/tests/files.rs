@@ -143,6 +143,20 @@ fn sftp_roundtrip_and_shell_cwd_without_test_hook() {
             }),
         "no temp or backup file left behind: {list}"
     );
+    // a stale backup from an interrupted swap does not block the next one
+    let stale = root.join(format!(
+        ".{}.cbo-bak",
+        remote.file_name().unwrap().to_str().unwrap()
+    ));
+    std::fs::write(&stale, b"stale").unwrap();
+    std::fs::write(&edited, b"second edit\n").unwrap();
+    let again = job(
+        id,
+        json!({"op":"upload", "local":edited, "remote":remote, "overwrite":true}),
+    );
+    assert_eq!(again["state"], "done", "{again}");
+    assert_eq!(std::fs::read(&remote).unwrap(), b"second edit\n");
+    assert!(!stale.exists(), "stale backup removed");
     // overwrite on a missing target simply creates it
     let fresh = root.join("fresh.txt");
     let made = job(

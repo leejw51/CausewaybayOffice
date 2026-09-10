@@ -41,7 +41,7 @@ def main():
         # Kitty graphics through the C ABI over real localhost SSH (tools/kitty_test.py).
         stages.append(("kitty", ["python3", "tools/kitty_test.py", "--selftest",
                                  "--lib", "rust/target/release/libcbo_core.dylib"], "kitty"))
-    for phase in ("maps", "aichat", "kitty", "restorewrite", "restoreread"):
+    for phase in ("maps", "aichat", "kitty", "notes", "hotnote", "restorewrite", "restoreread"):
         group = "restore" if phase.startswith("restore") else phase
         stages.append((f"love-{phase}", [args.love, "love2d", f"--shots={phase}"], group))
     results = []

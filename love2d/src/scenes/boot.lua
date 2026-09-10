@@ -32,24 +32,26 @@ function Boot:advance()
   if self.done then
     return
   end
-  self.done = true
-  self.app.audio.play("select")
-  self.app.switch("lobby")
+  -- switch() refuses during a transition; stay armed so the next Space works
+  if self.app.switch("lobby") then
+    self.done = true
+    self.app.audio.play("select")
+  end
 end
 
+-- The title waits for the player: only Space moves on. No timer, no click.
 function Boot:update(dt)
   self.t = self.t + dt
-  if self.t >= 2.5 then
+end
+
+function Boot:keypressed(key)
+  if key == "space" then
     self:advance()
   end
 end
 
-function Boot:keypressed()
-  self:advance()
-end
-
 function Boot:mousepressed()
-  self:advance()
+  -- clicks do nothing here: Space is the only way in
 end
 
 -- Key art covers the content rect (16:9 source, centre-cropped).
@@ -111,7 +113,7 @@ function Boot:draw()
 
   if t > 1.2 then
     local blink = 0.5 + 0.5 * math.sin(t * 6)
-    local msg = "PRESS ANY KEY"
+    local msg = "PRESS SPACE"
     local mx = math.floor((vw - G.uiWidth(msg)) / 2)
     G.ui(msg, mx + 1, math.floor(vh * 0.9) + 1, "black", 0.6 * blink)
     G.ui(msg, mx, math.floor(vh * 0.9), "yellow", blink)

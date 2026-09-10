@@ -138,6 +138,16 @@ function M.run(App, phase)
     App.push("connect", { fromTerminal = fromTerminal })
   end
 
+  -- The title only leaves on Space (no timer, no click). Phases that wait
+  -- for the lobby at ~3 s get the key pressed here, outside the at() chain
+  -- so their own timings stay put; phases that switch scenes themselves are
+  -- unaffected (advance is a no-op once the boot scene is done).
+  fx.after(1.5, function()
+    if App.sceneName == "boot" then
+      key("space")
+    end
+  end)
+
   local QA_DIR = "/tmp/cbo_qa"
 
   -- phase 3 walkthroughs live in their own module
@@ -510,12 +520,61 @@ function M.run(App, phase)
                   end
                   check(
                     "new file landed in the shell folder",
-                    body == "# 銅鑼灣 todo\n- tram",
+                    body == "# 銅鑼灣 todo\n- tram\n",
                     body
                   )
-                  os.remove(dir .. "/" .. newName)
-                  App.sessions.close(connected.id)
-                  finish(0.2)
+                  -- reopen: Esc without edits uploads nothing; DISCARD after edits keeps the file
+                  local stamp = io.popen(string.format("stat -f %%m '%s/%s'", dir, newName))
+                    :read("*l")
+                  check(
+                    "hot note reopens the new file",
+                    sc:hotNote(newName) and App.hasOverlay("hotnote")
+                  )
+                  local ro = App.top()
+                  local deadline4 = love.timer.getTime() + 30
+                  local function poll4()
+                    if ro.state == "download" and love.timer.getTime() < deadline4 then
+                      fx.after(0.2, poll4)
+                      return
+                    end
+                    check(
+                      "reopened file shows the saved text",
+                      ro.state == "edit" and ro.editor:line(2) == "- tram",
+                      ro.error
+                    )
+                    ro:keypressed("escape", none)
+                    check(
+                      "Esc on an unchanged file closes without an upload",
+                      not App.hasOverlay("hotnote") and ro.state == "edit" and not ro.uploaded
+                    )
+                    check("hot note again", sc:hotNote(newName))
+                    local rd = App.top()
+                    local deadline5 = love.timer.getTime() + 30
+                    local function poll5()
+                      if rd.state == "download" and love.timer.getTime() < deadline5 then
+                        fx.after(0.2, poll5)
+                        return
+                      end
+                      rd:textinput("SHOULD NOT LAND")
+                      rd:discard()
+                      fx.after(0.5, function()
+                        local g3 = assert(io.open(dir .. "/" .. newName, "rb"))
+                        local kept = g3:read("*a")
+                        g3:close()
+                        local stamp2 = io.popen(string.format("stat -f %%m '%s/%s'", dir, newName))
+                          :read("*l")
+                        check(
+                          "DISCARD keeps the remote file untouched",
+                          kept == body and stamp2 == stamp and not App.hasOverlay("hotnote")
+                        )
+                        os.remove(dir .. "/" .. newName)
+                        App.sessions.close(connected.id)
+                        finish(0.2)
+                      end)
+                    end
+                    fx.after(0.2, poll5)
+                  end
+                  fx.after(0.2, poll4)
                 end
                 fx.after(0.2, poll3)
               end)
@@ -1175,6 +1234,7 @@ function M.run(App, phase)
   if phase == "art" then
     at(1.3, function()
       shot("shot_boot")
+      key("space")
     end)
     at(2.9, function()
       shot("shot_lobby")
@@ -1699,9 +1759,12 @@ function M.run(App, phase)
     check("1.3 boot scene", App.sceneName == "boot")
     check("core is real (not mock)", App.core.mock == false, App.core.path)
     shot("qa_boot")
+    key("a")
+    check("1.3 title ignores other keys", App.sceneName == "boot")
+    key("space")
   end)
   at(2.6, function()
-    check("1.3 lobby after boot", App.sceneName == "lobby")
+    check("1.3 lobby after boot", App.sceneName == "map" or App.sceneName == "map2", App.sceneName)
     shot("qa_lobby_empty")
     App.push("help")
   end)

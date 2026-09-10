@@ -43,6 +43,7 @@ UI work.
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous session |
 | Ctrl+K | Search sessions (fuzzy over name, host, user) |
 | Ctrl+Shift+K | Local history; Tab switches to completions and next-command predictions |
+| Space (title screen) | Enter the lobby; the title waits for it, no timer and no other key |
 | Ctrl+R / RENAME | Rename session (the button sits in the terminal bar) |
 | Ctrl+, | Settings (API keys, keepalive, display) |
 | Right / Ctrl+Space | Accept the ghost completion after the cursor (Ctrl+Space opens AI when there is none; on macOS it may be taken by the input-source switch, Right always works) |

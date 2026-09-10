@@ -595,6 +595,7 @@ mod tests {
     fn kinds_and_fts_query() {
         assert_eq!(parse_kinds(""), ALL_KINDS.to_vec());
         assert_eq!(parse_kinds("command, HOST,nope"), vec!["command", "host"]);
+        assert_eq!(parse_kinds("note"), vec!["note"]);
         assert_eq!(parse_kinds("nope"), ALL_KINDS.to_vec());
         assert_eq!(fts_query("git  status"), "\"git\"* \"status\"*");
         assert_eq!(fts_query("세션 이름"), "\"세션\"* \"이름\"*");
