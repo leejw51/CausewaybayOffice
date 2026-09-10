@@ -414,3 +414,7 @@ Change `cbo.h` and `cbo_cdef.lua` together (via `make cdef`) or not at all.
   CodeMan38 — [SIL OFL 1.1](love2d/assets/fonts/LICENSE-pressstart2p.txt).
 * [LÖVE](https://love2d.org) 11.5, LuaJIT, and the `ssh2`, `vt100`, `ureq`
   and `unicode-width` crates.
+
+## License
+
+[MIT](LICENSE). The bundled fonts keep their own licenses listed above.
