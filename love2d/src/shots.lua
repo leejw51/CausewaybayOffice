@@ -1031,17 +1031,17 @@ function M.run(App, phase)
     end)
     at(0.5, function()
       check(
-        "portrait map keeps the horizontal map fitted to the width",
+        "portrait map covers the tall view (pans sideways)",
         App.scene.L.infoH == 112
-          and App.scene.L.mapW == App.D.vw
-          and App.scene.L.mapH <= App.scene.L.viewH
+          and App.scene.L.mapH == App.scene.L.viewH
+          and App.scene.L.mapW > App.D.vw
       )
       local fits = true
       for i = 1, #App.scene.nodes.platforms do
-        local x, y = App.scene:toScreen(App.scene:nodeMapPos(i))
-        fits = fits and x >= 0 and x <= App.D.vw and y >= 0 and y <= App.scene.L.viewH
+        local _, y = App.scene:toScreen(App.scene:nodeMapPos(i))
+        fits = fits and y >= 0 and y <= App.scene.L.viewH
       end
-      check("all portrait map stages are on screen without panning", fits)
+      check("all portrait map stages are within the view's height", fits)
       shot("qa_map_portrait")
     end)
     at(0.3, function()
@@ -1051,8 +1051,8 @@ function M.run(App, phase)
       sc:mousemoved(100, 40)
       sc:mousereleased(100, 40, 2)
       check(
-        "portrait fitted map stays letterboxed (no panning needed)",
-        sc.cam.y == math.floor((sc.L.mapH - sc.L.viewH) / 2)
+        "portrait map pans sideways only (camera y fixed at 0)",
+        sc.cam.y == 0 and sc.cam.x >= 0 and sc.cam.x <= sc.L.mapW - sc.L.viewW
       )
       shot("qa_map_panned")
     end)
@@ -1453,8 +1453,14 @@ function M.run(App, phase)
     end)
     at(1.0, function()
       shot("qa_portrait_map")
-      check("map fits the width in portrait", App.scene.L and App.scene.L.mapW == D.vw)
-      check("map info panel below the map", App.scene.L and App.scene.L.infoY == App.scene.L.viewH)
+      check(
+        "map covers the tall view in portrait",
+        App.scene.L and App.scene.L.mapH == App.scene.L.viewH and App.scene.L.mapW > D.vw
+      )
+      check(
+        "map info panel below the map",
+        App.scene.L and App.scene.L.infoY == App.scene.L.viewY + App.scene.L.viewH
+      )
       App.switch("lobby")
     end)
     at(0.8, function()

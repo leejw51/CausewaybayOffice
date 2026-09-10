@@ -1911,10 +1911,10 @@ function M.run(App)
     )
     local fp = Map.fit(770, 1370, true)
     check(
-      "map portrait keeps the horizontal map, fitted to the width",
-      fp.mapW == 770
-        and fp.mapH == math.ceil(770 * 9 / 16)
-        and fp.mapH < fp.viewH
+      "map portrait covers the tall view (pans sideways, no letterbox)",
+      fp.mapH == fp.viewH
+        and fp.mapW > 770
+        and fp.mapW == math.ceil(fp.viewH * 16 / 9)
         and fp.infoY == fp.viewY + fp.viewH
         and fp.infoH == 112
     )
@@ -1939,9 +1939,22 @@ function M.run(App)
     end
     local fp2 = Map.fit(400, 300, true)
     check(
-      "map portrait on a short window fits the height instead",
-      fp2.mapH <= fp2.viewH and fp2.mapW <= 400 and fp2.infoH == 112
+      "map portrait on a short window still covers the view",
+      fp2.mapH >= fp2.viewH and fp2.mapW >= 400 and fp2.infoH == 112
     )
+    -- private mode: the map's tooltip and info panel never show the address
+    do
+      local Config3 = require("src.config")
+      local saved = Config3.get().maskIds
+      Config3.get().maskIds = true
+      local who = Config3.who("leejw51", "100.93.166.76", 22)
+      check(
+        "private who() stars user and address",
+        not who:find("leejw51", 1, true) and not who:find("100.93", 1, true),
+        who
+      )
+      Config3.get().maskIds = saved
+    end
     check("ctrl+o chord = orientation", Keys.appChord("o", ctrl) == "orientation")
     check("orientation cycle", D.ORIENTATIONS[1] == "auto" and #D.ORIENTATIONS == 3)
     check(
@@ -2238,22 +2251,21 @@ function M.run(App)
       sc:keypressed("home", {})
       local hx = sc:cameraTarget()
       check("Home recenters selected stage", not sc.manualPan and sc.cam.x == hx)
-      -- portrait: the fitted map never needs panning
+      -- portrait: the map covers the tall view and pans sideways only
       sc.L = Map.fit(400, 600, true)
       sc.cam.x, sc.cam.y = 0, 0
       sc:pan(99999, 99999)
       local page = sc:mapRectOnScreen()
       check(
-        "portrait map page is letterboxed inside the view",
-        page.w == sc.L.mapW
-          and page.h == sc.L.mapH
-          and page.y0 > 0
-          and page.y0 + page.h < sc.L.viewH
+        "portrait map page covers the view (no letterbox bars)",
+        page.w == sc.L.viewW
+          and page.h == sc.L.viewH
+          and page.y0 == sc.L.viewY
+          and sc.L.mapW > sc.L.viewW
       )
       check(
-        "portrait fitted map stays letterboxed (centred, no panning)",
-        sc.cam.x == math.floor((sc.L.mapW - sc.L.viewW) / 2)
-          and sc.cam.y == math.floor((sc.L.mapH - sc.L.viewH) / 2)
+        "portrait panning is sideways only and bounded",
+        sc.cam.x == sc.L.mapW - sc.L.viewW and sc.cam.y == 0
       )
       sc.L = savedLayout
       sc:placeHero(true)

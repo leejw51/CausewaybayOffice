@@ -61,7 +61,7 @@ UI work.
 | Map 1 | World-map lobby: arrows/WASD move along paths, Enter walks and connects, R rename, Del forget host, [ ] page |
 | Map 2 | Session-grid lobby: search by name/address; Tab cycles filters, Esc clears search and filters |
 | F11 / Settings > display | Fullscreen (desktop) or window, remembered in SQLite and logged to display.jsonl |
-| Ctrl+O / Settings > orientation | auto / landscape / portrait layout (portrait: 1-2 card columns, AI panel below the terminal, the same horizontal map fitted to the width) |
+| Ctrl+O / Settings > orientation | auto / landscape / portrait layout (portrait: 1-2 card columns, AI panel below the terminal, the same horizontal map covering the tall view, panning sideways) |
 
 When a terminal has focus everything else (Ctrl+C, Ctrl+D, arrows, function
 keys) goes straight to the remote shell.

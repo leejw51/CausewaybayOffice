@@ -230,9 +230,10 @@ end
 function Map.fit(vw, vh, portrait)
   local W, H = 16, 9
   if portrait then
-    -- same map, fitted: width-bound normally, height-bound on a short window
+    -- same map, covering the view like landscape: it fills the tall view and
+    -- the camera pans sideways to follow the hero (no letterbox bars)
     local viewH = math.max(60, vh - HEADER_H - INFO_H_PORTRAIT - 16)
-    local k = math.min(vw / W, viewH / H)
+    local k = math.max(vw / W, viewH / H)
     return {
       mapW = math.ceil(W * k),
       mapH = math.ceil(H * k),
@@ -1053,7 +1054,8 @@ function Map:drawLabel(slot, pop)
   end
   local sx, sy = self:toScreen(self:nodeMapPos(slot))
   local name = self:stageName(host)
-  local line = app.sessions.hostKey(host)
+  -- shown, not the raw key: private mode stars the user and the address
+  local line = app.cfg.who(host.user, host.host, host.port)
   local state, rec = self:stageState(host)
   local key = app.sessions.hostKey(host)
   local err = self.errors[key] or (state == "error" and rec and app.core.error(rec.id)) or nil
@@ -1153,7 +1155,7 @@ function Map:drawInfo()
     local rows, cols = self.rowTxt, self.rowCol
     clear(rows)
     clear(cols)
-    rows[1], cols[1] = key, "cyan"
+    rows[1], cols[1] = app.cfg.who(host.user, host.host, host.port), "cyan"
     rows[2], cols[2] = "key " .. keyTxt, "gray"
     rows[3], cols[3] =
       "last " .. (host.lastUsed and os.date("%Y-%m-%d %H:%M", host.lastUsed) or "never"), "gray"
