@@ -22,12 +22,15 @@ Term.__index = Term
 
 local TAB_H = 16
 local CWD_H = 16
+-- {label, has icon, min virtual width}: optional buttons leave narrow strips.
 local TAB_BUTTONS = {
   { "< LOBBY", true },
   { "DISCONNECT", false },
-  { "AI CLOSE", false },
+  { "AI CLOSE", false, 440 },
   { "UPLOAD", false },
   { "DOWNLOAD", false },
+  { "RENAME", false, 440 },
+  { "AUTO NOTE", false, 440 },
 }
 local STATUS_H = 16
 local PAD = 4
@@ -323,7 +326,7 @@ function Term.toolbar(D, G)
   local buttons, x, row = {}, 4, 0
   local limit = D.vw - 56
   for _, b in ipairs(TAB_BUTTONS) do
-    if b[1] ~= "AI CLOSE" or D.vw >= 440 then
+    if not b[3] or D.vw >= b[3] then
       local w = G.uiWidth(b[1]) + (b[2] and 26 or 12)
       if x + w > limit and x > 4 then
         x, row = 4, row + 1
@@ -476,6 +479,54 @@ end
 
 -- The panel slides (expo) over the old grid; the session is resized once,
 -- when the slide has finished, so the shell sees a single SIGWINCH.
+-- The visible screen as text (trailing blanks and empty rows dropped).
+function Term:screenText()
+  local tv = self:view()
+  if not tv or not tv.cells or not tv.rows or not tv.cols then
+    return ""
+  end
+  local lines = {}
+  for row = 0, tv.rows - 1 do
+    lines[#lines + 1] = tv:rowText(row, 0, tv.cols - 1)
+  end
+  while #lines > 0 and lines[#lines] == "" do
+    lines[#lines] = nil
+  end
+  return table.concat(lines, "\n")
+end
+
+-- AUTO NOTE: capture the screen, open the panel in note mode and let it
+-- summarize (with a key) and save. One click, nothing to type.
+function Term:autoNote()
+  local app = self.app
+  local text = self:screenText()
+  if text == "" then
+    app.toast("Nothing on screen to note")
+    app.audio.play("error")
+    return false
+  end
+  local rec = app.sessions.get(self.id)
+  local where = rec and app.cfg.who(rec.user, rec.host) or ""
+  local cwd = app.core.cwd(self.id)
+  local header = "AUTO NOTE  " .. (rec and rec.name or "") .. "  " .. where
+  if cwd ~= "" then
+    header = header .. "  " .. cwd
+  end
+  header = header .. "  " .. os.date("%Y-%m-%d %H:%M")
+  if not self.aiOpen then
+    self:toggleAI()
+  elseif not self.ai then
+    self.ai = AIPanel.new(app, self.id)
+  end
+  local result, err = self.ai:autoNote(text, header)
+  if not result then
+    app.toast(err or "Auto note failed")
+    return false
+  end
+  app.toast(result == "summarizing" and "Auto note: summarizing the screen…" or "Auto note saved")
+  return true
+end
+
 function Term:toggleAI()
   local app = self.app
   self.aiOpen = not self.aiOpen
@@ -1051,6 +1102,9 @@ function Term:drawTabStrip(rec)
   local rowY = (toolbarRows - 1) * TAB_H
   local function button(id, label, icon, fn)
     local pos = positions[id == "ai" and "AI CLOSE" or label]
+    if not pos then
+      return -- hidden at this width (see TAB_BUTTONS)
+    end
     x = pos.x
     local w = pos.w
     local lift = (self.hover[id] and self.hover[id].lift) or 0
@@ -1072,16 +1126,20 @@ function Term:drawTabStrip(rec)
   button("disconnect", "DISCONNECT", nil, function()
     app.disconnectSession(app.sessions.get(self.id))
   end)
-  if vw >= 440 then
-    button("ai", self.aiOpen and "AI CLOSE" or "AI CHAT", nil, function()
-      self:toggleAI()
-    end)
-  end
+  button("ai", self.aiOpen and "AI CLOSE" or "AI CHAT", nil, function()
+    self:toggleAI()
+  end)
   button("upload", "UPLOAD", nil, function()
     self:upload()
   end)
   button("download", "DOWNLOAD", nil, function()
     self:toggleDownloadPick()
+  end)
+  button("rename", "RENAME", nil, function()
+    app.push("rename", { id = self.id })
+  end)
+  button("autonote", "AUTO NOTE", nil, function()
+    self:autoNote()
   end)
   x = endX + 4
   G.drawFrame(G.ledStrip(8), Lobby.ledFrame(G, ST, rec.state, self.t), x, rowY + 4, 1, 1)

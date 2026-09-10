@@ -244,3 +244,35 @@ the window; Escape clears its search and filters.
 Text fields reserve cursor space and preserve the parent's clipping rectangle.
 Single-line labels truncate at Unicode boundaries with an ellipsis; Help wraps
 its columns and scrolls. Dialogs size their content to their actual frame.
+
+## Notes, AI context and AUTO NOTE (2026-09-10)
+
+* **Notes** live in sqlite (`notes` + `notes_fts`, schema v4) regardless of the
+  recording opt-in: they are deliberate input. ABI: `cbo_note_add`,
+  `cbo_note_delete`, `cbo_note_list`; search through `cbo_search*` with kind
+  `note`. Deleting a note removes its FTS row and vector.
+* **Vectors per model.** `embeddings.model` decides which rows a search sees.
+  With "OpenAI indexing" on and a key, `text-embedding-3-small` (background
+  worker). Otherwise `local-ngram-v1`: signed feature hashing of words, word
+  bigrams and character trigrams into 512 dims, L2-normalised, computed in
+  process. It finds near spellings, inflections and shared fragments, not
+  paraphrases. A provider switch leaves the other model's rows pending, so the
+  worker re-embeds. Offline notes get their local vector on insert.
+* **Hybrid always.** `cbo_search` fuses BM25 and the vector pass with RRF in
+  every configuration; a failing remote pass degrades to BM25.
+* **AI panel** (`scenes/ai.lua`): chat and notes modes (Shift+Tab). Chat
+  bubbles carry COPY and X (drop from context), CLEAR ALL empties it. Note
+  bubbles carry READ (full-screen `scenes/note.lua`: COPY, TERM, DEL), COPY and
+  X (delete). PASTE saves the clipboard as a note. FIND: BM25 as you type,
+  Enter runs the hybrid pass. Esc leaves FIND before it closes the panel.
+* **Notes feed the chat.** `AI:send` runs the question through the note search
+  (hybrid, 5 hits, 600 chars each) and appends the hits to the system prompt;
+  the user bubble shows "+N notes".
+* **AUTO NOTE** (terminal bar, hidden below 520 virtual px like RENAME):
+  `Term:screenText` (visible rows, trailing blanks dropped) → `AI:autoNote`.
+  With a key: a separate LLM request with `AI.AUTO_SYSTEM` summarises; the note
+  is header + summary + `--- screen ---` + capture (clipped to 1500 chars).
+  Without a key, on error or on Esc: header + capture. The chat request and the
+  auto-note request are independent.
+* **Mock core** keeps notes in memory with a term-overlap search so the UI and
+  the in-engine suite work without the dylib.

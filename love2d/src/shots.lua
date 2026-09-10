@@ -241,6 +241,142 @@ function M.run(App, phase)
     return
   end
 
+  -- notes: AUTO NOTE from the terminal bar, typed and pasted notes, FIND,
+  -- the full-screen reader, the chat picking notes up. Real SSH + real DB;
+  -- every note made here is deleted at the end.
+  if phase == "notes" then
+    local connected
+    -- ids that existed before the phase: everything else is ours to delete
+    local preexisting = {}
+    for _, n in ipairs(App.core.noteList(5000)) do
+      preexisting[n.id] = true
+    end
+    local function cleanup()
+      for _, n in ipairs(App.core.noteList(5000)) do
+        if not preexisting[n.id] then
+          App.core.noteDelete(n.id)
+        end
+      end
+    end
+    at(1, function()
+      setMode(1280, 800)
+      App.setOrientation("landscape")
+      connected = App.sessions.open({ host = "localhost", user = os.getenv("USER") or "dev" })
+      App.switch("terminal", { id = connected.id })
+    end)
+    at(3, function()
+      check(
+        "notes test uses connected real SSH",
+        App.core.state(connected.id) == App.core.ST.CONNECTED
+      )
+      line("echo CBO_QA_NOTE screen capture for the auto note; uname -s")
+    end)
+    at(1.5, function()
+      local sc = term()
+      local pos = require("src.scenes.terminal").toolbar(App.D, App.G)
+      check(
+        "terminal bar shows RENAME and AUTO NOTE",
+        pos["RENAME"] ~= nil and pos["AUTO NOTE"] ~= nil
+      )
+      local before = #App.core.noteList(500)
+      check("AUTO NOTE captures the screen", sc:autoNote() and sc.aiOpen and sc.ai.mode == "notes")
+      local deadline = love.timer.getTime() + 120
+      local function poll()
+        if sc.ai.auto and love.timer.getTime() < deadline then
+          fx.after(0.2, poll)
+          return
+        end
+        local after = App.core.noteList(500)
+        check(
+          "auto note is saved in the database",
+          #after == before + 1 and after[1].text:find("^AUTO NOTE"),
+          after[1] and after[1].text:sub(1, 80)
+        )
+        shot("qa_notes_auto")
+        local ai = sc.ai
+        ai.noteInput.value, ai.noteInput.selectAll = "", false
+        sc:textinput(
+          "CBO_QA_NOTE restart nginx after the cert renews: sudo systemctl restart nginx"
+        )
+        sc:keypressed("return", none)
+        check(
+          "typed note saved, input cleared",
+          ai.noteInput.value == "" and ai.notes[#ai.notes].text:find("systemctl", 1, true)
+        )
+        love.system.setClipboardText("CBO_QA_NOTE wifi password is in the drawer")
+        ai:mousepressed(ai.pasteButton[1] + 2, ai.pasteButton[2] + 2)
+        check("PASTE saves the clipboard", ai.notes[#ai.notes].text:find("wifi", 1, true))
+        fx.after(0.5, function()
+          shot("qa_notes_list")
+          fx.after(0.3, function()
+            -- FIND
+            ai:setFinding(true)
+            sc:textinput("nginx")
+          end)
+          fx.after(0.8, function()
+            check(
+              "FIND lists the nginx note",
+              #ai.hits >= 1 and ai:hitText(ai.hits[1]):find("nginx", 1, true)
+            )
+            shot("qa_notes_find")
+            sc:keypressed("return", none) -- hybrid pass
+            fx.after(0.8, function()
+              check(
+                "hybrid FIND keeps the nginx note on top",
+                #ai.hits >= 1 and ai:hitText(ai.hits[1]):find("nginx", 1, true),
+                ai.hits[1] and ai.hits[1].sources and table.concat(ai.hits[1].sources, "+")
+              )
+              ai:cancel()
+              -- reader
+              local n = ai.notes[#ai.notes - 1]
+              ai:read(n)
+              fx.after(0.5, function()
+                check("READ opens the full screen note", App.hasOverlay("note"))
+                shot("qa_notes_read")
+                App.pop()
+                fx.after(0.4, function()
+                  -- the chat sees the notes
+                  ai:setMode("chat")
+                  local notes = ai:notesFor("how do I restart nginx")
+                  check(
+                    "chat context picks the nginx note",
+                    #notes >= 1 and notes[1]:find("nginx", 1, true),
+                    notes[1]
+                  )
+                  ai.messages = {
+                    { role = "user", content = "how do I restart nginx", notesUsed = #notes },
+                    {
+                      role = "assistant",
+                      content = "sudo systemctl restart nginx",
+                      provider = ai.provider,
+                    },
+                  }
+                  fx.after(0.4, function()
+                    shot("qa_notes_chat")
+                    setMode(800, 1400)
+                    App.setOrientation("portrait")
+                    fx.after(0.8, function()
+                      ai:setMode("notes")
+                      fx.after(0.5, function()
+                        shot("qa_notes_portrait")
+                        cleanup()
+                        check("QA notes removed", #App.core.noteList(500) == before)
+                        App.sessions.close(connected.id)
+                        finish(0.2)
+                      end)
+                    end)
+                  end)
+                end)
+              end)
+            end)
+          end)
+        end)
+      end
+      fx.after(0.2, poll)
+    end)
+    return
+  end
+
   -- kitty graphics: real SSH, the python tool emits every variant, the view
   -- must decode and paint them into the terminal canvas.
   if phase == "kitty" then

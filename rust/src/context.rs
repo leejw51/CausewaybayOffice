@@ -102,6 +102,7 @@ pub fn stats(conn: &Connection) -> Result<Value, String> {
         "commands": db::table_count(conn, "commands"),
         "events": db::table_count(conn, "events"),
         "ai_messages": db::table_count(conn, "ai_messages"),
+        "notes": db::table_count(conn, "notes"),
         "embeddings": db::table_count(conn, "embeddings"),
         "transcript_windows": db::table_count(conn, "transcripts_fts"),
         "transitions": db::table_count(conn, "transitions"),

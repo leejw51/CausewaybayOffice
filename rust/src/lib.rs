@@ -17,6 +17,7 @@ pub mod input_history;
 pub mod learning;
 pub mod llm;
 pub mod names;
+pub mod notes;
 pub mod patterns;
 pub mod record;
 pub mod search;
@@ -1032,6 +1033,63 @@ pub unsafe extern "C" fn cbo_search(
         let _ = record::flush_now();
         ret_json(
             search::hybrid_global(&q, &kinds, limit).map(|h| search::to_json(&h)),
+            "[]",
+        )
+    })
+}
+
+// ---- notes ------------------------------------------------------------------
+
+/// # Safety
+/// `text` must be NULL or a valid NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn cbo_note_add(text: *const c_char, session_id: i32) -> i64 {
+    guard(-1, || {
+        let Some(text) = cstr(text) else {
+            set_last_error("note text is required");
+            return -1;
+        };
+        match db::with(|c| notes::add(c, text, session_id as i64)) {
+            Ok(id) => {
+                clear_last_error();
+                id
+            }
+            Err(e) => {
+                set_last_error(e);
+                -1
+            }
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cbo_note_delete(id: i64) -> i32 {
+    guard(-1, || match db::with(|c| notes::delete(c, id)) {
+        Ok(true) => {
+            clear_last_error();
+            0
+        }
+        Ok(false) => {
+            set_last_error("no such note");
+            -1
+        }
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cbo_note_list(limit: i32) -> *const c_char {
+    guard(std::ptr::null(), || {
+        let limit = if limit <= 0 {
+            200
+        } else {
+            (limit as usize).min(5000)
+        };
+        ret_json(
+            db::with(|c| notes::list(c, limit)).map(serde_json::Value::Array),
             "[]",
         )
     })

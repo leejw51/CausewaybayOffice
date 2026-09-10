@@ -16,6 +16,8 @@ local ROWS = {
   { "Ctrl+,", "settings (keys, provider, CRT)" },
   { "Right / Ctrl+Space", "Accept the ghost completion (Right: terminal only)" },
   { "Ctrl+Shift+Space", "AI sidekick panel" },
+  { "Shift+Tab in the AI panel", "chat <-> notes (saved locally, searchable, fed to the chat)" },
+  { "AUTO NOTE (terminal bar)", "screen -> AI summary -> note (raw capture without a key)" },
   { "Esc", "raw ESC to the shell (vim-safe); closes a panel" },
   { "F2 / Ctrl+Esc / Esc Esc", "back to the lobby (Esc double-tap: 300 ms)" },
   { "MAP 1 / MAP 2", "choose and remember the lobby layout" },

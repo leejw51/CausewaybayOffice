@@ -43,10 +43,12 @@ UI work.
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous session |
 | Ctrl+K | Search sessions (fuzzy over name, host, user) |
 | Ctrl+Shift+K | Local history; Tab switches to completions and next-command predictions |
-| Ctrl+R | Rename session |
+| Ctrl+R / RENAME | Rename session (the button sits in the terminal bar) |
 | Ctrl+, | Settings (API keys, keepalive, display) |
 | Right / Ctrl+Space | Accept the ghost completion after the cursor (Ctrl+Space opens AI when there is none; on macOS it may be taken by the input-source switch, Right always works) |
 | Ctrl+Shift+Space | AI sidekick panel (the grid reflows to the remaining width) |
+| Shift+Tab in the AI panel | Chat <-> notes |
+| AUTO NOTE | Terminal bar: screen -> AI summary -> saved note (the raw capture without a key) |
 | Ctrl+= / Ctrl+- | Terminal zoom 1x / 2x (also in Settings) |
 | Shift+PgUp / PgDn, wheel | Scrollback |
 | F11 | Fullscreen |
@@ -135,6 +137,27 @@ provider's API and nowhere else:
 
 Keys are entered in Settings (Ctrl+,) and saved in the private local SQLite database; an environment variable is used when the settings field is
 empty.
+
+Every bubble has **COPY** (clipboard) and **X** (drop that message from the
+context sent with the next question); **CLEAR ALL** empties the context.
+
+### Notes
+
+Shift+Tab, or the **NOTES** button, turns the panel into a notebook. Whatever
+you type and Enter is saved to the local database at once; **PASTE** saves the
+clipboard as a note without typing. Each note has **READ** (full screen, with
+COPY, TERM to review it as terminal input, DEL), **COPY** and **X**. **FIND**
+searches as you type (BM25 over an FTS5 index); Enter adds the vector pass. With
+"OpenAI indexing" on, vectors come from `text-embedding-3-small`; otherwise a
+local hashed n-gram model runs offline, so BM25 and the vector pass always fuse
+(reciprocal rank fusion). Nothing leaves the machine unless indexing is on.
+
+The chat reads the notebook on its own: each question is searched against the
+notes first and the best hits ride along in the system prompt; the bubble shows
+"+N notes" when that happened. **AUTO NOTE** in the terminal bar captures the
+visible screen, asks the model for a short summary when a key exists, and saves
+the summary with the capture underneath (Esc keeps the raw capture; without a
+key the capture is the note). One click from a terminal to a searchable record.
 
 ## One lobby, two layouts, and automatic Favorites
 
@@ -268,8 +291,9 @@ shell editing, history navigation and full-screen programs can make it inaccurat
 
 “OpenAI indexing” is a separate, default-off setting. Enabling it permits background
 uploads of stored commands, transcripts, AI records and saved-host details to OpenAI
-for embeddings, using your key. This can incur API charges. The history UI uses local
-text search; semantic/hybrid search is also exposed through the core ABI.
+for embeddings, using your key. This can incur API charges. Without it the vector
+pass uses a local hashed n-gram model (no network, no charges). The history UI uses
+local text search; hybrid search backs the AI panel's notes and the core ABI.
 
 Ctrl+Enter in the AI panel now opens a command review. Clipboard paste uses the
 remote terminal’s bracketed-paste mode when available; multiline paste otherwise

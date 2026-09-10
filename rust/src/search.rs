@@ -10,7 +10,15 @@ use crate::db;
 use crate::embed;
 
 pub const RRF_K: f64 = 60.0;
-pub const ALL_KINDS: [&str; 6] = ["host", "session", "command", "transcript", "ai", "event"];
+pub const ALL_KINDS: [&str; 7] = [
+    "host",
+    "session",
+    "command",
+    "transcript",
+    "ai",
+    "event",
+    "note",
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hit {
@@ -210,6 +218,29 @@ pub fn bm25(
                     })
                 },
             )?,
+            "note" => fts_hits(
+                conn,
+                kind,
+                "SELECT n.id, n.text, n.ts_ms, n.session_id, bm25(notes_fts)
+                 FROM notes_fts f JOIN notes n ON n.id = f.rowid
+                 WHERE notes_fts MATCH ?1 ORDER BY bm25(notes_fts) LIMIT ?2",
+                &q,
+                limit,
+                |r| {
+                    let text: String = r.get(1)?;
+                    Ok(Hit {
+                        kind: "note".into(),
+                        id: r.get(0)?,
+                        title: crate::notes::title(&text),
+                        snippet: crate::notes::snippet(&text),
+                        ts_ms: r.get(2)?,
+                        host_id: 0,
+                        session_id: r.get(3)?,
+                        score: -r.get::<_, f64>(4)?,
+                        sources: vec!["bm25"],
+                    })
+                },
+            )?,
             "session" => session_hits(conn, query, limit)?,
             _ => Vec::new(),
         };
@@ -283,21 +314,30 @@ pub fn semantic(
         return Ok(Vec::new());
     }
     let qv = embed::query_vec_with(conn, query)?;
-    semantic_with_vector(conn, &qv, kinds, limit)
+    semantic_with_vector(conn, &qv, kinds, limit, embed::model_with(conn))
 }
 
+/// Nearest neighbours among the vectors of `model` only (dimensions and
+/// spaces differ between models).
 pub fn semantic_with_vector(
     conn: &Connection,
     qv: &[f32],
     kinds: &[&'static str],
     limit: usize,
+    model: &str,
 ) -> Result<Vec<Hit>, String> {
     let entries = embed::entries(conn)?;
     let mut scored: Vec<(f32, &embed::Entry)> = entries
         .iter()
-        .filter(|e| kinds.contains(&e.kind.as_str()))
+        .filter(|e| e.model == model && kinds.contains(&e.kind.as_str()))
         .map(|e| (embed::cosine(qv, &e.vec), e))
         .collect();
+    // Local vectors share no features with an unrelated text (cosine ~0);
+    // such rows are noise, not weak hits. Neural embeddings sit far from 0
+    // for everything, so no floor there.
+    if model == embed::LOCAL_MODEL {
+        scored.retain(|(score, _)| *score >= embed::LOCAL_MIN_SCORE);
+    }
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut hits = Vec::new();
     for (score, e) in scored.into_iter().take(limit) {
@@ -319,10 +359,13 @@ pub fn semantic_global(
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
+    let model = embed::model();
     let qv = embed::query_vec(query)?;
-    db::with(|c| semantic_with_vector(c, &qv, kinds, limit))
+    db::with(|c| semantic_with_vector(c, &qv, kinds, limit, model))
 }
 
+/// BM25 and the vector pass always run together: local vectors need no
+/// network, and a failing remote pass degrades to BM25 alone.
 pub fn hybrid_global(
     query: &str,
     kinds: &[&'static str],
@@ -330,11 +373,7 @@ pub fn hybrid_global(
 ) -> Result<Vec<Hit>, String> {
     let pool = limit.saturating_mul(3).max(1);
     let lex = db::with(|c| bm25(c, query, kinds, pool))?;
-    let sem = if embed::available() {
-        semantic_global(query, kinds, pool).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let sem = semantic_global(query, kinds, pool).unwrap_or_default();
     let mut fused = rrf(&[lex, sem], RRF_K);
     fused.truncate(limit);
     Ok(fused)
@@ -430,6 +469,22 @@ pub fn describe(conn: &Connection, kind: &str, id: i64) -> Result<Option<Hit>, S
                 },
             )
             .optional(),
+        "note" => conn
+            .query_row(
+                "SELECT text, ts_ms, session_id FROM notes WHERE id = ?1",
+                params![id],
+                |r| {
+                    let text: String = r.get(0)?;
+                    Ok(mk(
+                        crate::notes::title(&text),
+                        crate::notes::snippet(&text),
+                        r.get(1)?,
+                        0,
+                        r.get(2)?,
+                    ))
+                },
+            )
+            .optional(),
         "session" => conn
             .query_row(
                 "SELECT name, user, host, port, started_ms, host_id FROM sessions WHERE id = ?1",
@@ -497,11 +552,7 @@ pub fn hybrid(
 ) -> Result<Vec<Hit>, String> {
     let pool = limit.max(1) * 3;
     let lex = bm25(conn, query, kinds, pool)?;
-    let sem = if embed::available_with(conn) {
-        semantic(conn, query, kinds, pool).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let sem = semantic(conn, query, kinds, pool).unwrap_or_default();
     let mut fused = rrf(&[lex, sem], RRF_K);
     fused.truncate(limit.max(1));
     Ok(fused)

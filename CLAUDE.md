@@ -28,6 +28,7 @@ LÖVE 11.5 / LuaJIT UI (`love2d/`). Read `docs/SPEC.md` before changing anything
 |---|---|
 | `rust/src/lib.rs` | FFI surface only, no logic |
 | `rust/src/{session,ssh,term,llm,names,search}.rs` | SSH, VT100, keepalive, LLM SSE, registry, names, fuzzy search |
+| `rust/src/{notes,embed}.rs` | notes table + FTS; vectors per model (OpenAI or the local n-gram fallback) |
 | `rust/src/graphics.rs` | kitty graphics protocol: APC split, image store, placements, replies |
 | `love2d/src/core.lua` | Lua-friendly wrapper over the FFI (strings, tables, errors) |
 | `love2d/src/{display,fx,gfx,term_view}.lua` | rendering, CRT, tweens, fonts |

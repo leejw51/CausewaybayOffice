@@ -987,6 +987,190 @@ function M.run(App)
   panel:close()
   check("ai close frees the request", panel.req == nil)
 
+  -- chat context controls: per-message clear, clear all
+  do
+    local ctx = AI.new(App, trec.id)
+    ctx.messages = {
+      { role = "user", content = "a" },
+      { role = "assistant", content = "b", provider = "openai" },
+      { role = "user", content = "c" },
+    }
+    check(
+      "ai clear one message drops it from the context",
+      ctx:clearMessage(2) and #ctx.messages == 2 and ctx.messages[2].content == "c"
+    )
+    check("ai clear ignores a bad index", not ctx:clearMessage(9) and #ctx.messages == 2)
+    ctx:draw(0, 0, 300, 300, 0)
+    check("ai bubbles expose COPY and X buttons", #ctx.bubbleBtns == 4, #ctx.bubbleBtns)
+    local hasClearAll = false
+    for _, bt in ipairs(ctx.headerBtns) do
+      hasClearAll = hasClearAll or bt.fn ~= nil
+    end
+    check("ai header has mode and clear-all buttons", #ctx.headerBtns == 2 and hasClearAll)
+    check(
+      "ai clear all empties the context",
+      ctx:clearAll() and #ctx.messages == 0 and not ctx:clearAll()
+    )
+    ctx:draw(0, 0, 300, 300, 0)
+    check("ai clear all button hides with an empty context", #ctx.headerBtns == 1)
+    ctx:close()
+  end
+
+  -- notes: add, paste, copy, find, read, delete; chat picks the notes up
+  do
+    local clip, setClip = "", nil
+    local origGet, origSet = love.system.getClipboardText, love.system.setClipboardText
+    love.system.getClipboardText = function()
+      return clip
+    end
+    love.system.setClipboardText = function(t)
+      setClip = t
+    end
+    local notesPanel = AI.new(App, trec.id)
+    notesPanel:keypressed("tab", { ctrl = false, shift = true, alt = false, gui = false })
+    check(
+      "ai Shift+Tab switches to note mode",
+      notesPanel.mode == "notes" and notesPanel.input == notesPanel.noteInput
+    )
+    notesPanel.noteInput.value = "restart nginx after cert renew: sudo systemctl restart nginx"
+    notesPanel:keypressed("return", none)
+    check(
+      "note Enter saves and clears the input",
+      #notesPanel.notes == 1 and notesPanel.noteInput.value == "" and notesPanel.notes[1].id ~= nil
+    )
+    local first = notesPanel.notes[1]
+    check(
+      "note is in the core list",
+      Core.noteList(10)[1] and Core.noteList(10)[1].text == first.text
+    )
+    clip = "  \n"
+    check(
+      "PASTE with an empty clipboard is refused",
+      notesPanel:pasteNote() == nil and notesPanel.error ~= nil
+    )
+    clip = "wifi password in the drawer\r\n"
+    check(
+      "PASTE saves the clipboard as a note",
+      notesPanel:pasteNote() ~= nil
+        and #notesPanel.notes == 2
+        and notesPanel.notes[2].text == "wifi password in the drawer"
+    )
+    check(
+      "COPY puts a note on the clipboard",
+      notesPanel:copyText(first.text) and setClip == first.text
+    )
+    notesPanel:draw(0, 0, 300, 300, 0)
+    check(
+      "note bubbles expose READ, COPY and X",
+      #notesPanel.bubbleBtns == 6,
+      #notesPanel.bubbleBtns
+    )
+    check(
+      "note mode shows ADD and PASTE",
+      notesPanel.pasteButton ~= nil and notesPanel.sendButton ~= nil
+    )
+    notesPanel:setFinding(true)
+    notesPanel.noteInput.value = "nginx"
+    notesPanel:update(0.016)
+    check(
+      "FIND lists BM25 hits as you type",
+      #notesPanel.hits == 1 and notesPanel.hits[1].id == first.id,
+      #notesPanel.hits
+    )
+    notesPanel.noteInput.value = "wifi"
+    notesPanel:submitNote()
+    check(
+      "FIND Enter runs the full pass",
+      #notesPanel.hits == 1 and notesPanel.hits[1].id == notesPanel.notes[2].id
+    )
+    check(
+      "Esc leaves FIND and keeps the panel",
+      notesPanel:cancel() and not notesPanel.finding and notesPanel.hits[1] == nil
+    )
+    -- the chat sees the notes
+    local originalStart = Core.llmStart
+    local started
+    Core.llmStart = function(p)
+      started = p
+      return originalStart(p)
+    end
+    notesPanel:setMode("chat")
+    notesPanel.chatInput.value = "how do I restart nginx"
+    notesPanel:send()
+    Core.llmStart = originalStart
+    check(
+      "chat attaches the best matching note first",
+      started and started.system:find("[note 1] restart nginx", 1, true) ~= nil,
+      started and started.system
+    )
+    check("user bubble records how many notes rode along", notesPanel.messages[1].notesUsed == 1)
+    notesPanel:close()
+    check("system prompt is unchanged without notes", AI.systemWithNotes({}) == AI.SYSTEM)
+    -- reader
+    local NoteView = require("src.scenes.note")
+    local reader = NoteView.new(App, {
+      id = first.id,
+      text = first.text,
+      ts_ms = first.ts_ms,
+      sessionId = trec.id,
+      panel = notesPanel,
+    })
+    reader:draw()
+    check("note reader draws COPY, TERM and DEL", #reader.buttons == 3)
+    setClip = nil
+    reader:keypressed("c", none)
+    check("note reader C copies the whole note", setClip == first.text)
+    local pushedName
+    local origPush = App.push
+    App.push = function(name, params)
+      pushedName = name
+      return { params = params }
+    end
+    reader:keypressed("t", none)
+    check("note reader T reviews the note as terminal input", pushedName == "paste")
+    App.push = origPush
+    local origPop = App.pop
+    local popped = false
+    App.pop = function()
+      popped = true
+    end
+    reader:keypressed("d", none)
+    App.pop = origPop
+    check(
+      "note reader D deletes through the panel",
+      popped and #notesPanel.notes == 1 and #Core.noteList(10) == 1
+    )
+    -- auto note: mock streams a summary, the note carries header + summary + capture
+    notesPanel.mode = "chat"
+    local r = notesPanel:autoNote("$ ls\nreport.txt  notes.md", "AUTO NOTE mary-1 lee@dev")
+    check(
+      "auto note starts a summary request in note mode",
+      r == "summarizing" and notesPanel.auto ~= nil and notesPanel.mode == "notes"
+    )
+    for _ = 1, 400 do
+      Core.update(0.05)
+      notesPanel:update(0.05)
+      if not notesPanel.auto then
+        break
+      end
+    end
+    local last = notesPanel.notes[#notesPanel.notes]
+    check(
+      "auto note is saved with header, summary and the capture",
+      not notesPanel.auto
+        and last
+        and last.text:find("^AUTO NOTE mary%-1")
+        and last.text:find("report.txt", 1, true)
+        and last.text:find("--- screen ---", 1, true)
+    )
+    check("auto note refuses an empty screen", notesPanel:autoNote("   ", "x") == nil)
+    for _, n in ipairs(Core.noteList(50)) do
+      Core.noteDelete(n.id)
+    end
+    notesPanel:close()
+    love.system.getClipboardText, love.system.setClipboardText = origGet, origSet
+  end
+
   -- session limit
   lib.reset()
   Sessions.init(Core)
@@ -1110,8 +1294,10 @@ function M.run(App)
         "narrow terminal prints the session name on its own title row",
         Term.titleRows(D, rec, G) == 2
       )
-      D.vw = 770
+      check("narrow strip drops RENAME and AUTO NOTE", Term.toolbar(D, G)["RENAME"] == nil)
+      D.vw = 960
       check("wide terminal keeps name beside the buttons", Term.titleRows(D, rec, G) == 1)
+      check("wide strip shows RENAME and AUTO NOTE", Term.toolbar(D, G)["AUTO NOTE"] ~= nil)
       check("no record: single tab row", Term.titleRows(D, nil, G) == 1)
       local top = 32 + Term.CWD_H
       local _, r2 = Term.availFor(D, 0, top)
@@ -2186,6 +2372,47 @@ function M.run(App)
     sc:toggleDownloadPick()
     sc:toggleDownloadPick()
     check("DOWNLOAD toggles picking off again", not sc.downloadPicking)
+    function tv:rowText(_, c0, c1)
+      local out = {}
+      for col = c0, c1 do
+        out[#out + 1] = string.char(self.cells[col].cp)
+      end
+      return (table.concat(out):gsub("%s+$", ""))
+    end
+    check("screenText reads the visible rows", sc:screenText() == "report.txt")
+    local positions = Term.toolbar({ vw = 900 }, G)
+    check(
+      "terminal bar has RENAME and AUTO NOTE",
+      positions["RENAME"] ~= nil and positions["AUTO NOTE"] ~= nil
+    )
+    local noted
+    sc.ai = {
+      autoNote = function(_, text, header)
+        noted = { text = text, header = header }
+        return "summarizing"
+      end,
+    }
+    sc.aiOpen = true
+    app.sessions = {
+      get = function()
+        return { name = "mary-1", user = "lee", host = "dev" }
+      end,
+    }
+    app.cfg = {
+      who = function(u, h)
+        return u .. "@" .. h
+      end,
+    }
+    app.core.cwd = function()
+      return "/srv"
+    end
+    check(
+      "AUTO NOTE hands the screen and a header to the panel",
+      sc:autoNote()
+        and noted
+        and noted.text == "report.txt"
+        and noted.header:find("^AUTO NOTE  mary%-1  lee@dev  /srv")
+    )
   end
 
   do

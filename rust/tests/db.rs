@@ -463,12 +463,31 @@ fn semantic_and_hybrid_search_with_openai() {
     cbo_init();
     cbo_record_enable(1);
     if env_key("openai").is_none() {
-        println!("skipped: no OPENAI_API_KEY");
-        assert_eq!(cbo_embed_available(), 0);
-        let q = cs("list files");
-        let hits = j(unsafe { cbo_search_semantic(q.as_ptr(), std::ptr::null(), 5) });
-        assert_eq!(hits.as_array().map(|a| a.len()), Some(0));
-        assert!(last_error().contains("no embedding provider"));
+        println!("skipped remote part: no OPENAI_API_KEY; checking the local model");
+        assert_eq!(cbo_embed_available(), 0, "no OpenAI indexing");
+        embed::set_paused(true);
+        record_fake(
+            22,
+            &["ls -la", "git push origin main", "docker compose up -d"],
+            b"",
+        );
+        db::with(embed::run_local_all).expect("local vectors");
+        assert_eq!(cbo_embed_pending(), 0, "local model leaves nothing pending");
+        let q = cs("pushing to origin");
+        let k = cs("command");
+        let hits = j(unsafe { cbo_search_semantic(q.as_ptr(), k.as_ptr(), 3) });
+        assert_eq!(hits[0]["title"], "git push origin main", "{}", hits);
+        assert_eq!(hits[0]["sources"], serde_json::json!(["semantic"]));
+        let q = cs("origin");
+        let hits = j(unsafe { cbo_search(q.as_ptr(), k.as_ptr(), 3) });
+        assert_eq!(hits[0]["title"], "git push origin main", "{}", hits);
+        assert_eq!(
+            hits[0]["sources"].as_array().map(|s| s.len()),
+            Some(2),
+            "BM25 and the vector pass fuse: {}",
+            hits
+        );
+        embed::set_paused(false);
         return;
     }
     db::with(|c| db::kv_set(c, "embed.enabled", "1")).expect("opt in");

@@ -185,13 +185,20 @@ const char* cbo_session_transcript(int32_t id, int32_t max_bytes);
 const char* cbo_recent_commands(int32_t host_id /* 0 = any */, int32_t limit);
 
 /* ---- search: hybrid BM25 (sqlite FTS5) + semantic (embeddings, cosine), fused by RRF ----
-   kinds_csv: any of "host,session,command,transcript,ai,event" or "" for all.
+   kinds_csv: any of "host,session,command,transcript,ai,event,note" or "" for all.
    Returns JSON [{kind, id, score, title, snippet, ts_ms, host_id, session_id}]. */
 const char* cbo_search(const char* query, const char* kinds_csv, int32_t limit);
 const char* cbo_search_bm25(const char* query, const char* kinds_csv, int32_t limit);
 const char* cbo_search_semantic(const char* query, const char* kinds_csv, int32_t limit);
 int32_t     cbo_embed_pending(void);                  /* rows waiting for an embedding (background) */
 int32_t     cbo_embed_available(void);                /* 1 when kv "embed.enabled" = "1" and provider key is configured */
+
+/* ---- notes: free text from the AI panel's note mode. Saved whether or not recording is
+   on; indexed for BM25 at once and embedded in the background when indexing is enabled.
+   Search them with cbo_search / cbo_search_bm25 and kinds_csv "note". ---- */
+int64_t     cbo_note_add(const char* text, int32_t session_id);  /* returns id or -1 */
+int32_t     cbo_note_delete(int64_t id);                         /* 0 ok, -1 unknown id */
+const char* cbo_note_list(int32_t limit);                        /* JSON [{id, ts_ms, text, session_id}] newest first */
 
 /* ---- patterns: learned from recorded events; drives button highlighting and assist ----
    Returns JSON [{action, count, prob}] for what the user usually does next in `scene`

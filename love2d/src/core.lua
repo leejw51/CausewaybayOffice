@@ -471,6 +471,105 @@ function Core.historySearch(query, kinds, limit)
   return decoded(lib.cbo_search_bm25(query or "", kinds or "", limit or 20), {})
 end
 
+-- Notes (AI panel note mode). The mock keeps them in memory so the UI and the
+-- in-engine suite work without the core; the real core writes sqlite and
+-- indexes them for BM25 (at once) and semantic search (background embedder).
+local mockNotes, mockNoteId = {}, 0
+
+function Core.noteAdd(text, sessionId)
+  text = (text or ""):gsub("%s+$", "")
+  if text:match("^%s*$") then
+    return nil, "note is empty"
+  end
+  if Core.mock then
+    mockNoteId = mockNoteId + 1
+    local note = { id = mockNoteId, ts_ms = Core.nowMs(), text = text, session_id = sessionId or 0 }
+    table.insert(mockNotes, 1, note)
+    return note
+  end
+  local id = tonumber(lib.cbo_note_add(text, sessionId or 0))
+  if id < 0 then
+    return nil, str(lib.cbo_last_error())
+  end
+  return { id = id, ts_ms = Core.nowMs(), text = text, session_id = sessionId or 0 }
+end
+
+function Core.noteDelete(id)
+  if Core.mock then
+    for i, n in ipairs(mockNotes) do
+      if n.id == id then
+        table.remove(mockNotes, i)
+        return true
+      end
+    end
+    return false
+  end
+  return lib.cbo_note_delete(id) == 0
+end
+
+-- Newest first.
+function Core.noteList(limit)
+  if Core.mock then
+    local out = {}
+    for i = 1, math.min(#mockNotes, limit or 200) do
+      out[i] = mockNotes[i]
+    end
+    return out
+  end
+  return decoded(lib.cbo_note_list(limit or 200), {})
+end
+
+-- Search hits [{id, title, snippet, ts_ms, score, sources}]. `semantic` adds
+-- the embedding pass (network, only when indexing is enabled); off = BM25.
+function Core.noteSearch(query, limit, semantic)
+  query = query or ""
+  if query:match("^%s*$") then
+    return {}
+  end
+  if Core.mock then
+    local out = {}
+    local terms = {}
+    for t in query:lower():gmatch("%S+") do
+      if #t > 1 then
+        terms[#terms + 1] = t
+      end
+    end
+    if #terms == 0 then
+      return {}
+    end
+    -- Like the hybrid pass, partial matches rank rather than vanish.
+    for _, n in ipairs(mockNotes) do
+      local hay = n.text:lower()
+      local matched = 0
+      for _, t in ipairs(terms) do
+        if hay:find(t, 1, true) then
+          matched = matched + 1
+        end
+      end
+      if matched > 0 and (semantic or matched == #terms) then
+        out[#out + 1] = {
+          kind = "note",
+          id = n.id,
+          title = n.text:match("[^\n]*"),
+          snippet = n.text,
+          ts_ms = n.ts_ms,
+          score = matched / #terms,
+          sources = { "bm25" },
+        }
+      end
+    end
+    table.sort(out, function(a, b)
+      return a.score > b.score
+    end)
+    for i = #out, (limit or 50) + 1, -1 do
+      out[i] = nil
+    end
+    return out
+  end
+  local fn = semantic and lib.cbo_search or lib.cbo_search_bm25
+  return decoded(fn(query, "note", limit or 50), {})
+end
+
 function Core.complete(hostId, prefix, limit)
   if Core.mock then
     return {}

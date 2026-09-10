@@ -153,6 +153,17 @@ CREATE TABLE IF NOT EXISTS input_history (
 CREATE INDEX IF NOT EXISTS input_history_field ON input_history(field,updated_ms DESC);
 "#;
 
+/// v4: free-form notes typed into the AI panel's note mode. Stored whether
+/// or not recording is on (they are explicit user input); indexed for BM25
+/// and, when indexing is enabled, embedded like every other row.
+const SCHEMA_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts_ms INTEGER NOT NULL, text TEXT NOT NULL,
+  session_id INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS notes_ts ON notes(ts_ms);
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(text, tokenize='unicode61');
+"#;
+
 /// Apply pending migrations. Safe to call repeatedly.
 pub fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -166,7 +177,12 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
             |r| r.get(0),
         )
         .map_err(sql_err)?;
-    let steps: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, SCHEMA_V2), (3, SCHEMA_V3)];
+    let steps: &[(i64, &str)] = &[
+        (1, SCHEMA_V1),
+        (2, SCHEMA_V2),
+        (3, SCHEMA_V3),
+        (4, SCHEMA_V4),
+    ];
     for (version, sql) in steps {
         if *version <= current {
             continue;
@@ -567,11 +583,12 @@ mod tests {
     #[test]
     fn migrations_are_idempotent_and_fts5_works() {
         let conn = open_memory().expect("mem db");
-        assert_eq!(schema_version(&conn), 3);
+        assert_eq!(schema_version(&conn), 4);
         migrate(&conn).expect("second migrate");
         migrate(&conn).expect("third migrate");
-        assert_eq!(schema_version(&conn), 3);
-        assert_eq!(table_count(&conn, "migrations"), 3);
+        assert_eq!(schema_version(&conn), 4);
+        assert_eq!(table_count(&conn, "migrations"), 4);
+        assert_eq!(table_count(&conn, "notes"), 0);
         assert_eq!(table_count(&conn, "cmd_transitions"), 0);
         assert!(fts5_available(&conn));
         conn.execute(
