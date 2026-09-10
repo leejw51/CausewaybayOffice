@@ -92,7 +92,40 @@ function K.appChord(key, m)
   return nil
 end
 
+-- Modifier state. On macOS it is read from the OS (CoreGraphics session
+-- flags), not from SDL: system shortcuts such as Cmd+Shift+5 (screen
+-- recording) swallow the key-up of Cmd/Shift, so SDL keeps reporting them as
+-- held and every keypress and text event is dropped until the modifier is
+-- pressed again. That is why typing died while the Mac recorded the screen.
+local osFlags
+if love.system.getOS() == "OS X" then
+  local ok, fn = pcall(function()
+    local ffi = require("ffi")
+    ffi.cdef("uint64_t CGEventSourceFlagsState(int32_t stateID);")
+    local C = ffi.load("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+    C.CGEventSourceFlagsState(0) -- probe: raises if the symbol is missing
+    return function()
+      return tonumber(C.CGEventSourceFlagsState(0)) -- combined session state
+    end
+  end)
+  if ok then
+    osFlags = fn
+  end
+end
+K.osFlags = osFlags
+
+local SHIFT, CTRL, ALT, GUI = 0x20000, 0x40000, 0x80000, 0x100000
+
 function K.mods()
+  if osFlags then
+    local f = osFlags()
+    return {
+      ctrl = f % (CTRL * 2) >= CTRL,
+      shift = f % (SHIFT * 2) >= SHIFT,
+      alt = f % (ALT * 2) >= ALT,
+      gui = f % (GUI * 2) >= GUI,
+    }
+  end
   local kb = love.keyboard
   return {
     ctrl = kb.isDown("lctrl", "rctrl"),
