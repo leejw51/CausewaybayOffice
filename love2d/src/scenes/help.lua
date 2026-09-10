@@ -18,7 +18,10 @@ local ROWS = {
   { "Ctrl+Shift+Space", "AI sidekick panel" },
   { "Shift+Tab in the AI panel", "chat <-> notes (saved locally, searchable, fed to the chat)" },
   { "AUTO NOTE (terminal bar)", "screen -> AI summary -> note (raw capture without a key)" },
-  { "HOT NOTE (terminal bar)", "click a filename: download, edit, Esc uploads it back" },
+  {
+    "HOT NOTE / NEW NOTE (terminal bar)",
+    "edit a remote file / a fresh apple0.txt in the shell folder; Esc uploads",
+  },
   { "Esc", "raw ESC to the shell (vim-safe); closes a panel" },
   { "F2 / Ctrl+Esc / Esc Esc", "back to the lobby (Esc double-tap: 300 ms)" },
   { "MAP 1 / MAP 2", "choose and remember the lobby layout" },

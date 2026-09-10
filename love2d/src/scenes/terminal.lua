@@ -29,9 +29,10 @@ local TAB_BUTTONS = {
   { "AI CLOSE", false, 440 },
   { "UPLOAD", false },
   { "DOWNLOAD", false },
-  { "RENAME", false, 440 },
-  { "AUTO NOTE", false, 440 },
-  { "HOT NOTE", false, 440 },
+  { "RENAME", false },
+  { "AUTO NOTE", false },
+  { "HOT NOTE", false },
+  { "NEW NOTE", false },
 }
 local STATUS_H = 16
 local PAD = 4
@@ -206,6 +207,21 @@ function Term:toggleHotNotePick()
   end
 end
 
+-- NEW NOTE: name a file, write it in the editor, upload it into the shell
+-- folder when done. Needs a known shell folder.
+function Term:newNote()
+  self.hotNotePicking, self.downloadPicking = false, false
+  self:resetFileCursor()
+  local cwd = self.app.core.cwd(self.id)
+  if cwd == "" then
+    self.app.toast("Shell folder unknown: run cd first")
+    self.app.audio.play("error")
+    return false
+  end
+  self.app.push("hotnote", { id = self.id, create = true, cwd = cwd })
+  return true
+end
+
 -- Open the editor on a remote file named in the terminal (relative to the
 -- shell folder when not absolute).
 function Term:hotNote(name)
@@ -259,6 +275,28 @@ function Term:openMenu(mx, my)
         "Upload file to this folder...",
         function()
           self:upload()
+        end,
+      },
+      {
+        filename and ("Hot note: edit " .. filename) or "Hot note: click a file to edit",
+        function()
+          if filename then
+            self:hotNote(filename)
+          else
+            self:toggleHotNotePick()
+          end
+        end,
+      },
+      {
+        "New note in this folder...",
+        function()
+          self:newNote()
+        end,
+      },
+      {
+        "Auto note (screen -> AI -> note)",
+        function()
+          self:autoNote()
         end,
       },
       {
@@ -1184,6 +1222,9 @@ function Term:drawTabStrip(rec)
   end)
   button("hotnote", "HOT NOTE", nil, function()
     self:toggleHotNotePick()
+  end)
+  button("newnote", "NEW NOTE", nil, function()
+    self:newNote()
   end)
   x = endX + 4
   G.drawFrame(G.ledStrip(8), Lobby.ledFrame(G, ST, rec.state, self.t), x, rowY + 4, 1, 1)

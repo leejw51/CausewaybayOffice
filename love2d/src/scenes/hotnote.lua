@@ -1,4 +1,5 @@
--- HOT NOTE: edit a remote file in place. The terminal's HOT NOTE button arms
+-- HOT NOTE: edit a remote file in place. NEW NOTE: the same editor on a
+-- fresh <fruit><number>.txt in the shell folder, created on Esc / DONE. The terminal's HOT NOTE button arms
 -- picking; a click on a filename downloads it (sftp, through the core's file
 -- job) into the save directory, this overlay opens on the text, and DONE /
 -- Esc write it back with an overwriting upload (atomic rename on the remote,
@@ -183,7 +184,15 @@ function HotNote.new(app, p)
   local root = love.filesystem.getSaveDirectory()
   love.filesystem.createDirectory(HotNote.DIR)
   s.localPath = string.format("%s/%s/%d-%s", root, HotNote.DIR, os.time(), s.fileName)
-  if p.text then
+  if p.create then
+    -- NEW NOTE: a fresh file with a random name, no prompt
+    s.cwd = p.cwd
+    s.created = true
+    s.tries = 0
+    local name, fruit = HotNote.randomName()
+    s.fruit = fruit
+    s:startCreate(name)
+  elseif p.text then
     -- tests: start on text without a transfer
     s.editor = Editor.new(p.text)
     s.state = "edit"
@@ -229,6 +238,47 @@ function HotNote:writeLocal()
   return true
 end
 
+-- NEW NOTE names: <fruit><number>.txt, e.g. apple0.txt, pear1.txt. The
+-- number starts at 0 and steps up while that name exists in the folder.
+HotNote.WORDS = {
+  "apple",
+  "pear",
+  "mango",
+  "lychee",
+  "kiwi",
+  "peach",
+  "plum",
+  "melon",
+  "lemon",
+  "grape",
+  "cherry",
+  "banana",
+  "papaya",
+  "guava",
+  "fig",
+  "durian",
+  "longan",
+  "pomelo",
+  "berry",
+  "lime",
+}
+function HotNote.randomName(fruit, n)
+  fruit = fruit or HotNote.WORDS[math.random(#HotNote.WORDS)]
+  return string.format("%s%d.txt", fruit, n or 0), fruit
+end
+
+-- Start an empty, dirty editor on <shell folder>/<name>; Esc / DONE create it.
+function HotNote:startCreate(name)
+  self.fileName = name
+  self.remote = self.cwd:gsub("/+$", "") .. "/" .. name
+  self.localPath =
+    string.format("%s/%s/%d-%s", love.filesystem.getSaveDirectory(), HotNote.DIR, os.time(), name)
+  self.editor = self.editor or Editor.new("")
+  self.editor.dirty = true
+  self.state, self.error = "edit", nil
+  return true
+end
+
 -- DONE / Esc: upload when changed, else just close.
 function HotNote:finish()
   if self.state == "upload" or self.state == "download" then
@@ -243,10 +293,12 @@ function HotNote:finish()
     self.error = err
     return false
   end
-  ok, err = self.app.core.filesStart(
-    self.id,
-    { op = "upload", ["local"] = self.localPath, remote = self.remote, overwrite = true }
-  )
+  ok, err = self.app.core.filesStart(self.id, {
+    op = "upload",
+    ["local"] = self.localPath,
+    remote = self.remote,
+    overwrite = not self.created,
+  })
   if not ok then
     self.error = err or "upload failed"
     self.app.audio.play("error")
@@ -291,7 +343,20 @@ function HotNote:update(dt)
         self.app.pop(self)
       end
     elseif st.state == "error" or st.state == "cancelled" then
-      self.error = st.error or (self.state .. " " .. st.state)
+      local err = st.error or (self.state .. " " .. st.state)
+      if
+        self.state == "upload"
+        and self.created
+        and self.tries < 20
+        and err:find("existing", 1, true)
+      then
+        -- the random name was taken: pick another and upload again
+        self.tries = self.tries + 1
+        self:startCreate(HotNote.randomName(self.fruit, self.tries))
+        self:finish()
+        return
+      end
+      self.error = err
       self.state = self.editor and "edit" or "error"
       self.app.audio.play("error")
     end
@@ -386,7 +451,8 @@ function HotNote:draw()
   local D, G = app.D, app.G
   local w, h = D.vw - 16, D.vh - 16
   local a = self.alpha or 1
-  local x, y = UI.frame("HOT NOTE  " .. self.fileName, w, h, D.vw, D.vh, a)
+  local title = (self.created and "NEW NOTE  " or "HOT NOTE  ") .. self.fileName
+  local x, y = UI.frame(title, w, h, D.vw, D.vh, a)
   self.buttons = {}
   local bx = x + w - 12
   local defs = { {

@@ -1524,6 +1524,70 @@ function M.run(App)
       "absolute path works without a shell folder",
       sc:hotNote("/etc/hosts") and pushed.params.remote == "/etc/hosts"
     )
+    -- NEW NOTE
+    pushed = nil
+    check("NEW NOTE needs a shell folder", not sc:newNote() and not pushed)
+    app2.core.cwd = function()
+      return "/srv/app/"
+    end
+    check(
+      "NEW NOTE opens the editor in create mode",
+      sc:newNote()
+        and pushed.name == "hotnote"
+        and pushed.params.create
+        and pushed.params.cwd == "/srv/app/"
+    )
+    requests = {}
+    fakeCore.filesStart = function(_, req)
+      requests[#requests + 1] = req
+      status = { state = "running", op = req.op }
+      return true
+    end
+    popped = nil
+    local rn = HotNote.randomName()
+    check("random note names are fruit + number .txt", rn:match("^%a+0%.txt$") ~= nil, rn)
+    check("names step the number", HotNote.randomName("pear", 1) == "pear1.txt")
+    local nn = HotNote.new(fakeApp, { id = 3, create = true, cwd = "/srv/app/" })
+    check(
+      "create mode opens an empty dirty editor at once, no prompt",
+      nn.state == "edit"
+        and #requests == 0
+        and nn.editor.dirty
+        and nn.remote:match("^/srv/app/%a+0%.txt$") ~= nil
+    )
+    nn:draw()
+    check("new note editor draws DONE, COPY, DISCARD", #nn.buttons == 3)
+    nn:textinput("- buy tram tickets")
+    nn:keypressed("escape", none)
+    check(
+      "Esc uploads the new file without overwrite",
+      nn.state == "upload"
+        and requests[1].op == "upload"
+        and requests[1].remote == nn.remote
+        and requests[1].overwrite == false
+    )
+    local firstRemote = nn.remote
+    status = {
+      state = "error",
+      op = "upload",
+      error = "Cannot create remote file (existing files are kept)",
+    }
+    nn:update(0.016)
+    check(
+      "a taken name steps the number and the upload is retried",
+      nn.state == "upload"
+        and nn.remote == firstRemote:gsub("0%.txt$", "1.txt")
+        and #requests == 2
+        and requests[2].remote == nn.remote
+    )
+    os.remove(requests[2]["local"])
+    local nf = assert(io.open(requests[1]["local"], "rb"))
+    check("new file body was written locally", nf:read("*a") == "- buy tram tickets")
+    nf:close()
+    os.remove(requests[1]["local"])
+    status = { state = "done", op = "upload" }
+    nn:update(0.016)
+    check("new note upload closes the editor", popped == nn and nn.uploaded)
   end
 
   -- session limit
@@ -1647,9 +1711,12 @@ function M.run(App)
       D.vw = 400
       check(
         "narrow terminal prints the session name on its own title row",
-        Term.titleRows(D, rec, G) == 2
+        Term.titleRows(D, rec, G) >= 2
       )
-      check("narrow strip drops RENAME and AUTO NOTE", Term.toolbar(D, G)["RENAME"] == nil)
+      check(
+        "narrow strip keeps the note buttons on wrapped rows",
+        Term.toolbar(D, G)["RENAME"] ~= nil and Term.toolbar(D, G)["NEW NOTE"] ~= nil
+      )
       D.vw = 1100
       check("wide terminal keeps name beside the buttons", Term.titleRows(D, rec, G) == 1)
       check("wide strip shows RENAME and AUTO NOTE", Term.toolbar(D, G)["AUTO NOTE"] ~= nil)

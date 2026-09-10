@@ -469,8 +469,56 @@ function M.run(App, phase)
             fx.after(0.4, function()
               shot("qa_hotnote_done")
               os.remove(remote)
-              App.sessions.close(connected.id)
-              finish(0.2)
+              -- NEW NOTE into the same folder
+              check(
+                "NEW NOTE opens an empty editor at once",
+                sc:newNote() and App.hasOverlay("hotnote")
+              )
+              local nv = App.top()
+              local newName = nv.fileName
+              check(
+                "fruit name in the shell folder",
+                nv.state == "edit"
+                  and nv.remote == dir .. "/" .. newName
+                  and newName:match("^%a+%d+%.txt$"),
+                newName
+              )
+              nv:textinput("# 銅鑼灣 todo")
+              nv:keypressed("return", none)
+              nv:textinput("- tram")
+              fx.after(0.3, function()
+                shot("qa_newnote_edit")
+              end)
+              fx.after(0.6, function()
+                nv:keypressed("escape", none)
+                check("Esc uploads the new file", nv.state == "upload")
+                local deadline3 = love.timer.getTime() + 30
+                local function poll3()
+                  if nv.state == "upload" and love.timer.getTime() < deadline3 then
+                    fx.after(0.2, poll3)
+                    return
+                  end
+                  check(
+                    "new note upload finished",
+                    nv.uploaded and not App.hasOverlay("hotnote"),
+                    nv.error
+                  )
+                  local g2 = io.open(dir .. "/" .. newName, "rb")
+                  local body = g2 and g2:read("*a") or nil
+                  if g2 then
+                    g2:close()
+                  end
+                  check(
+                    "new file landed in the shell folder",
+                    body == "# 銅鑼灣 todo\n- tram",
+                    body
+                  )
+                  os.remove(dir .. "/" .. newName)
+                  App.sessions.close(connected.id)
+                  finish(0.2)
+                end
+                fx.after(0.2, poll3)
+              end)
             end)
           end
           fx.after(0.2, poll2)

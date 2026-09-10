@@ -50,6 +50,7 @@ UI work.
 | Shift+Tab in the AI panel | Chat <-> notes |
 | AUTO NOTE | Terminal bar: screen -> AI summary -> saved note (the raw capture without a key) |
 | HOT NOTE | Terminal bar: click a filename to download it into an editor; Esc or DONE uploads it back |
+| NEW NOTE | Terminal bar: a fresh `apple0.txt`-style file opens in the editor; Esc or DONE uploads it into the shell folder |
 | Ctrl+= / Ctrl+- | Terminal zoom 1x / 2x (also in Settings) |
 | Shift+PgUp / PgDn, wheel | Scrollback |
 | F11 | Fullscreen |
@@ -170,6 +171,11 @@ upload: the bytes go to a temp file beside the original and are swapped in
 through a backup, so a failed upload leaves the original untouched. **DISCARD**
 closes without uploading. Files over 512 KB, non-UTF-8 or binary files are
 refused. Nothing is typed into the shell; the transfer is a file job.
+**NEW NOTE** opens an empty editor on a fresh fruit-named file (`apple0.txt`,
+`pear1.txt`) and uploads it into the shell folder when you finish; if that name
+already exists there, the number steps up and the upload is retried. All three note buttons, plus RENAME, are also in the
+right-click menu, and they stay in the bar at every window width (the bar
+wraps).
 
 ## One lobby, two layouts, and automatic Favorites
 

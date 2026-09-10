@@ -286,3 +286,9 @@ its columns and scrolls. Dialogs size their content to their actual frame.
   the backup (SFTP v3 has no overwriting rename); the original is restored if
   the swap fails. Unchanged files are not uploaded. Refused: > 512 KB, NUL
   bytes, invalid UTF-8.
+* **NEW NOTE**: `Term:newNote` needs a known shell folder and pushes the
+  same overlay with `create = true`; the overlay starts an empty dirty
+  editor on `<cwd>/<fruit><n>.txt` (`HotNote.randomName`, n from 0) and
+  uploads without `overwrite`; a taken name steps n and retries up to
+  twenty times, so an existing file is never replaced. The note buttons have
+  no width threshold: the tab strip wraps rows instead.
