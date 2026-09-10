@@ -320,11 +320,26 @@ function M.run(App)
     cv.cx = 0
     cv.cy = 9
     cv:update(0.001)
-    check("far jump takes longer, bounded", cv.cur.dur > short and cv.cur.dur <= 0.32, cv.cur.dur)
+    check("far jump takes longer, bounded", cv.cur.dur > short and cv.cur.dur <= 0.5, cv.cur.dur)
     check(
       "expoInOut symmetric",
       math.abs(fx.ease.expoInOut(0.25) + fx.ease.expoInOut(0.75) - 1) < 1e-6
     )
+    -- momentum: a retarget mid-flight does not restart from the slow phase
+    for _ = 1, 60 do
+      cv:update(0.016)
+    end
+    cv.cx, cv.cy = 30, 9
+    cv:update(0.001)
+    for _ = 1, 4 do
+      cv:update(0.016)
+    end
+    local before = cv.cur.x
+    cv.cx = 39
+    cv:update(0.001)
+    check("retarget mid-flight keeps its phase", cv.cur.t > 0.04, cv.cur.t)
+    cv:update(0.016)
+    check("retarget keeps moving at speed", cv.cur.x - before > 0.05, cv.cur.x - before)
   end
   -- font metrics: Unifont wide glyph is exactly 2 cells
   check("unifont ascii advance 8", G.fontTerm:getWidth("a") == 8, G.fontTerm:getWidth("a"))
@@ -1409,7 +1424,7 @@ function M.run(App)
       local expectedFlip = wantFlip == App.D.natural() and "auto" or wantFlip
       check(
         "display controls work on pages and overlays without leaking clicks",
-        #App.displayButtons() == 2
+        #App.displayButtons() == 3
           and #actions == 4
           and actions[1] == (App.D.fullscreen and "window" or "full")
           and actions[2] == expectedFlip
@@ -1619,18 +1634,9 @@ function M.run(App)
       end
       if w[1] >= 800 then
         check(
-          string.format(
-            "status bar at %dx%d has RETRO, zoom and PRIVACY buttons left of the hint",
-            w[1],
-            w[2]
-          ),
-          ids.retro
-            and ids.font
-            and ids.privacy
-            and ids.privacy.x + ids.privacy.w <= term.statusRightX,
-          tostring(ids.retro)
-            .. " "
-            .. tostring(ids.font)
+          string.format("status bar at %dx%d has the zoom button left of the hint", w[1], w[2]),
+          ids.font and ids.font.x + ids.font.w <= term.statusRightX,
+          tostring(ids.font)
             .. " vw="
             .. D.vw
             .. " rightX="
@@ -1655,6 +1661,35 @@ function M.run(App)
     check("zoom button zooms to 2x", D.termZoom == 2, D.termZoom)
     term:cycleZoom()
     check("zoom button cycles back to 1x", D.termZoom == 1, D.termZoom)
+    -- the toggles survive a completion hint (the hint box shrinks) and a
+    -- portrait-narrow bar (the keepalive text shortens instead)
+    do
+      D.resize(1080, 800)
+      term:layout()
+      term.suggestion = "ls -la"
+      term:drawStatus(rec)
+      local ids = {}
+      for _, bt in ipairs(term.buttons) do
+        ids[bt.id or ""] = bt
+      end
+      check("zoom button drawn beside a completion hint", ids.font ~= nil)
+      check(
+        "completion box stops before the zoom button",
+        term.completionBox and term.completionBox[1] + term.completionBox[3] <= ids.font.x,
+        term.completionBox and term.completionBox[3]
+      )
+      term.suggestion = nil
+      D.resize(800, 1400)
+      term:layout()
+      term:drawStatus(rec)
+      ids = {}
+      for _, bt in ipairs(term.buttons) do
+        ids[bt.id or ""] = bt
+      end
+      check("zoom button drawn in a portrait status bar", ids.font ~= nil, D.vw)
+      D.resize(1080, 800)
+      term:layout()
+    end
     -- PRIVACY: ids, hosts and ports are stars; names survive
     cfgT.maskIds = false
     check("who() plain", Config.who("alice", "10.0.0.7", 2222) == "alice@10.0.0.7:2222")

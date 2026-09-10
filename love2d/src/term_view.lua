@@ -29,7 +29,7 @@ local TERM_BG = 0x101830
 local NO_OPTS = {}
 
 -- Cursor motion tuning (seconds / cells).
-local CUR_MIN_DUR, CUR_MAX_DUR = 0.09, 0.32 -- tween length for 1 cell .. far jumps
+local CUR_MIN_DUR, CUR_MAX_DUR = 0.16, 0.5 -- tween length for 1 cell .. far jumps
 local TRAIL_N, TRAIL_LIFE = 24, 0.28 -- afterimages kept, seconds each lives
 local EMBER_N, EMBER_LIFE = 64, 0.45 -- ember pool, max life
 
@@ -370,12 +370,20 @@ end
 -- screen still reads as motion. Embers spray back along the motion.
 function TV:moveCursorTo(tx, ty)
   local c = self.cur
+  -- momentum: a move that arrives mid-flight keeps its phase instead of
+  -- re-running the slow start, so chained keystrokes stay at speed and only
+  -- the soft expo landing is replayed
+  local phase = 0
+  if c.moving and c.dur > 0 then
+    phase = math.min(c.t / c.dur, 0.5)
+  end
   c.fx, c.fy = c.x, c.y
   c.tx, c.ty = tx, ty
   local dx, dy = tx - c.fx, ty - c.fy
   local dist = math.sqrt(dx * dx + dy * dy * 4) -- rows are twice as tall as cols
-  c.dur = fx.clamp(CUR_MIN_DUR + dist * 0.012, CUR_MIN_DUR, CUR_MAX_DUR)
-  c.t, c.moving = 0, true
+  -- long enough that the expo curve reads: a slow start, a rush, a soft landing
+  c.dur = fx.clamp(CUR_MIN_DUR + dist * 0.02, CUR_MIN_DUR, CUR_MAX_DUR)
+  c.t, c.moving = c.dur * phase, true
   self:spawnEmbers(c.fx, c.fy, dx, dy, fx.clamp(math.floor(2 + dist * 0.6), 2, 10))
 end
 

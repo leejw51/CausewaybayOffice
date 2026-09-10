@@ -398,11 +398,27 @@ function App.update(dt)
   fx.update(dt)
 end
 
+-- RETRO: the cool-retro-term stages and the cursor trail together. Persisted
+-- with the rest of the config (cfg.retro), like PRIVACY (cfg.maskIds).
+function App.toggleRetro()
+  local cfg = Config.get()
+  cfg.retro = cfg.retro == false
+  Config.save()
+  fx.flash(0.15, 1, 1, 1, 0.15)
+end
+
+function App.togglePrivacy()
+  local cfg = Config.get()
+  cfg.maskIds = not cfg.maskIds
+  Config.save()
+  fx.flash(0.15, 1, 1, 1, 0.15)
+end
+
 -- Shared chrome is outside the scene rectangle, including modal overlays.
 function App.displayButtons()
   local buttons = {}
   local x = 6
-  for _, spec in ipairs({
+  local specs = {
     {
       D.fullscreen and "FULLSCREEN" or "WINDOW",
       true,
@@ -417,7 +433,27 @@ function App.displayButtons()
         App.flipOrientation()
       end,
     },
-  }) do
+    -- PRIVACY is application-wide: every scene masks user names, addresses
+    -- and ports through Config.who / nodeName / hidePath while it is lit.
+    {
+      "PRIVACY",
+      Config.get().maskIds == true,
+      function()
+        App.togglePrivacy()
+      end,
+    },
+  }
+  -- RETRO belongs to the terminal page only
+  if App.sceneName == "terminal" then
+    specs[#specs + 1] = {
+      "RETRO",
+      Config.get().retro ~= false,
+      function()
+        App.toggleRetro()
+      end,
+    }
+  end
+  for _, spec in ipairs(specs) do
     local w = G.uiWidth(spec[1]) + 14
     buttons[#buttons + 1] =
       { x = x, y = 3, w = w, h = 18, label = spec[1], active = spec[2], fn = spec[3] }

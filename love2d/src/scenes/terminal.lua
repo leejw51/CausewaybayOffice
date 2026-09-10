@@ -417,18 +417,12 @@ end
 
 -- RETRO button: the cool-retro-term stages and the cursor trail together.
 function Term:toggleRetro()
-  local cfg = self.app.cfg.get()
-  cfg.retro = cfg.retro == false
-  self.app.cfg.save()
-  self.app.fx.flash(0.15, 1, 1, 1, 0.15)
+  self.app.toggleRetro()
 end
 
 -- PRIVACY button: ids, hosts, addresses and ports draw as stars (screen capture).
 function Term:togglePrivacy()
-  local cfg = self.app.cfg.get()
-  cfg.maskIds = not cfg.maskIds
-  self.app.cfg.save()
-  self.app.fx.flash(0.15, 1, 1, 1, 0.15)
+  self.app.togglePrivacy()
 end
 
 -- Zoom button: 1x -> 2x -> 1x.
@@ -1182,13 +1176,12 @@ function Term:drawStatus(rec)
     + G.uiWidth(stTxt)
     + 12
     + (idleTxt and G.uiWidth(idleTxt) + 12 or 0)
-  -- RETRO / zoom / PRIVACY buttons sit left of the right-hand hint; the hint
+  -- the zoom button sits left of the right-hand hint; the hint
   -- shrinks to "F1 help" and the idle counter yields before they are dropped
   local cfgNow = app.cfg.get()
+  -- RETRO and PRIVACY live in the app-wide top bar; the zoom button stays here
   local toggles = {
-    { id = "retro", label = "RETRO", on = cfgNow.retro ~= false, fn = self.toggleRetro },
-    { id = "font", label = (self.zoom or 1) .. "x", on = true, fn = self.cycleZoom },
-    { id = "privacy", label = "PRIVACY", on = cfgNow.maskIds == true, fn = self.togglePrivacy },
+    { id = "font", label = "FONT " .. (self.zoom or 1) .. "x", on = true, fn = self.cycleZoom },
   }
   local btnW = 12
   for _, b in ipairs(toggles) do
@@ -1205,8 +1198,11 @@ function Term:drawStatus(rec)
   end
   local rightX = vw - G.uiWidth(right) - 8
   local stateW = G.uiWidth(stTxt)
+  -- the toggles outrank the keepalive text too: it shortens to "15s" before
+  -- they go, so they only vanish on a window too narrow for both
+  local coreMin = 18 + G.uiWidth("15s") + 12 + stateW + 12
   local leftEdge = rightX
-  if rightX - btnW > core then
+  if rightX - btnW > coreMin then
     leftEdge = rightX - btnW
     local bx = leftEdge + 4
     for _, b in ipairs(toggles) do
@@ -1283,7 +1279,7 @@ function Term:drawStatus(rec)
     local label = (transfer.op == "upload" and "UPLOAD " or "DOWNLOAD ")
       .. (transfer.name or "file")
       .. (rec.quickTransfer and progress or (transfer.error and " - retry" or " - done"))
-    local width = math.max(0, rightX - 12)
+    local width = math.max(0, leftEdge - 12)
     local utf8 = require("utf8")
     while G.uiWidth(label) > width - 8 and #label > 0 do
       label = label:sub(1, (utf8.offset(label, -1) or 1) - 1)
@@ -1294,7 +1290,7 @@ function Term:drawStatus(rec)
       self.transferBox = { 4, y + 1, width, STATUS_H - 2 }
     end
   elseif self.suggestion or self.fileHint then
-    local width = math.max(0, rightX - 12)
+    local width = math.max(0, leftEdge - 12)
     local text = self.suggestion and ("-> " .. self.suggestion .. "   (Right / ^Space)")
       or self.fileHint
     local utf8 = require("utf8")
