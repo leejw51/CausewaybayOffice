@@ -1620,7 +1620,7 @@ function M.run(App)
       if w[1] >= 800 then
         check(
           string.format(
-            "status bar at %dx%d has GLOW, zoom and PRIVACY buttons left of the hint",
+            "status bar at %dx%d has RETRO, zoom and PRIVACY buttons left of the hint",
             w[1],
             w[2]
           ),
@@ -1646,9 +1646,9 @@ function M.run(App)
     local cfgT = App.cfg.get()
     local was = cfgT.retro
     term:toggleRetro()
-    check("GLOW button flips cfg.retro", cfgT.retro == (was == false))
+    check("RETRO button flips cfg.retro", cfgT.retro == (was == false))
     term:toggleRetro()
-    check("GLOW button flips it back", cfgT.retro == was)
+    check("RETRO button flips it back", cfgT.retro == was)
     D.resize(1080, 800)
     term:layout()
     term:cycleZoom()
@@ -1660,13 +1660,21 @@ function M.run(App)
     check("who() plain", Config.who("alice", "10.0.0.7", 2222) == "alice@10.0.0.7:2222")
     term:togglePrivacy()
     check("PRIVACY button turns masking on", cfgT.maskIds == true)
-    check("who() masked", Config.who("alice", "10.0.0.7", 2222) == "****@****:**")
-    check("who() masked default port", Config.who("alice", "box") == "****@****")
+    check(
+      "who() masks user, address and port",
+      Config.who("alice", "10.0.0.7", 2222) == "****@****:**"
+    )
+    check("who() keeps a computer name", Config.who("alice", "box") == "****@box")
+    check("who() masks IPv6", Config.who("alice", "fe80::1") == "****@****")
     check(
       "nodeName keeps a label",
       Config.nodeName({ label = "office", host = "10.0.0.7" }) == "office"
     )
-    check("nodeName masks a bare host", Config.nodeName({ host = "10.0.0.7" }) == "****")
+    check("nodeName masks a bare address", Config.nodeName({ host = "10.0.0.7" }) == "****")
+    check(
+      "nodeName keeps a bare computer name",
+      Config.nodeName({ host = "office-mac" }) == "office-mac"
+    )
     check(
       "nodeName prefers the session name",
       Config.nodeName({ host = "h" }, { name = "mary-1" }) == "mary-1"

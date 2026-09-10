@@ -489,10 +489,14 @@ fx.retro = {
   bloom = 1.0, -- halo strength; glyphs are also pushed over-bright by it
   bg = { 16 / 255, 24 / 255, 48 / 255 }, -- terminal ground, subtracted before blurring
   burnIn = 0.45, -- 0 = instant decay, 1 = long persistence
-  noise = 0.07,
-  flicker = 0.08,
-  jitter = 0.18,
-  hsync = 0.06,
+  -- Motion is deliberately calm: the picture drifts slowly instead of
+  -- shaking every frame, the grain refreshes at a TV-like 12 Hz, and the
+  -- brightness breathes rather than flickers, so the eye can rest on it.
+  noise = 0.04,
+  flicker = 0.025,
+  jitter = 0.06,
+  hsync = 0.015,
+  grainHz = 12,
   rgbShift = 0.5,
   glowLine = 0.04,
   chroma = 0.55, -- phosphor modes: 0 = pure monochrome, 1 = keep every hue
@@ -548,6 +552,8 @@ function fx.initCRT()
     extern float noise;
     extern float glowLine;
     extern float jitter;
+    extern vec2 jitterOff;       // per-frame slow drift, in picture fractions
+    extern vec2 grainShift;      // noise texture offset, stepped at grainHz
     extern float rgbShift;
     extern float brightness;     // per-frame flicker
     extern float syncScale;      // per-frame horizontal sync tear
@@ -582,9 +588,9 @@ function fx.initCRT()
       if (retro > 0.5) {
         // horizontal sync: a sine tear that rolls with time
         p.x += sin((p.y + time) * syncFreq) * syncScale;
-        vec4 nz = Texel(noiseTex, p * 6.0 + vec2(fract(time / 0.051), fract(time / 0.237)));
-        // jitter: whole-picture wobble driven by the noise texture
-        vec2 tp = p + (nz.ba - 0.5) * vec2(0.007, 0.002) * jitter;
+        vec4 nz = Texel(noiseTex, p * 6.0 + grainShift);
+        // jitter: a slow whole-picture drift (computed in Lua from smooth noise)
+        vec2 tp = p + jitterOff * jitter;
         // rgb shift: chromatic fringing left/right
         vec2 d = vec2(rgbShift * 1.5 / size.x * scale, 0.0);
         // phosphor smear: strokes bleed half a native pixel sideways, so the
@@ -758,6 +764,7 @@ end
 -- cool-retro-term stages. Allocation-free per call.
 local crtSize = { 0, 0 }
 local NO_OPTS = {}
+fx.jitterOff, fx.grainShift = { 0, 0 }, { 0, 0 }
 function fx.drawCRT(canvas, x, y, scale, opts)
   opts = opts or NO_OPTS
   local enabled = opts.enabled ~= false and opts.crt ~= false and fx.crt
@@ -790,14 +797,22 @@ function fx.drawCRT(canvas, x, y, scale, opts)
       sh:send("glowLine", r.glowLine)
       sh:send("jitter", r.jitter)
       sh:send("rgbShift", r.rgbShift)
-      -- per-frame scalars, as cool-retro-term computes them in its vertex stage
-      local n1 = love.math.noise(t * 7.3, 0.37)
-      local n2 = love.math.noise(t * 0.9, 5.11)
+      -- per-frame scalars from smooth noise: slow drift, gentle breathing,
+      -- a rare sync wobble; the grain offset steps at grainHz
+      local n1 = love.math.noise(t * 0.8, 0.37)
+      local n2 = love.math.noise(t * 0.35, 5.11)
       sh:send("brightness", 1 + (n1 - 0.5) * r.flicker)
       local strength = 0.05 + 0.3 * r.hsync
       local rv = strength - n2
       sh:send("syncScale", (rv > 0 and rv or 0) * strength * (r.hsync > 0 and 1 or 0))
-      sh:send("syncFreq", 4 + 36 * n1)
+      sh:send("syncFreq", 4 + 12 * n1)
+      fx.jitterOff[1] = (love.math.noise(t * 0.6, 11.3) - 0.5) * 0.007
+      fx.jitterOff[2] = (love.math.noise(t * 0.5, 17.9) - 0.5) * 0.002
+      sh:send("jitterOff", fx.jitterOff)
+      local step = math.floor(t * (r.grainHz or 12))
+      fx.grainShift[1] = (step * 0.3183) % 1
+      fx.grainShift[2] = (step * 0.7071) % 1
+      sh:send("grainShift", fx.grainShift)
       local tube = fx.phosphorColor[opts.phosphor or "off"]
       sh:send("mono", tube and 1 or 0)
       sh:send("phosphor", tube or fx.phosphorColor.amber)

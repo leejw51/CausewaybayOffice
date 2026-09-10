@@ -409,7 +409,7 @@ function Map2:draw()
     end
     G.led(cx + 10, cy + 12, col, true, self.t)
     local Config = self.app.cfg
-    local shownName = Config.private() and e.name == e.host.host and "****" or e.name
+    local shownName = e.name == e.host.host and Config.hostShown(e.host.host) or e.name
     G.ui(fit(G, shownName, self.cardW - 36), cx + 22, cy + 8, "yellow")
     G.ui(fit(G, Config.who(e.host.user, e.host.host), self.cardW - 20), cx + 10, cy + 26, "white")
     G.ui("port " .. (Config.private() and "**" or (e.host.port or 22)), cx + 10, cy + 41, "gray")

@@ -87,10 +87,11 @@ OPENAI_API_KEY / ANTHROPIC_API_KEY / XAI_API_KEY (GROK_API_KEY alias).
 * Lobby: session cards on a shelf; new card slides in (expo-out), close pops out (expo-in).
   Cards pulse with the keepalive heartbeat; disconnected cards flicker red.
 * Terminal: cool-retro-term style screen (`fx.retro`, Settings "CRT phosphor fx" or the
-  GLOW status-bar button; "CRT tube colour" picks amber / green / white / off; the 1x/2x
+  RETRO status-bar button; "CRT tube colour" picks amber / green / white / off; the 1x/2x
   status-bar button cycles the terminal zoom; PRIVACY (or Settings "privacy: mask ids")
-  draws every user, host, address and port as stars for screen capture, keeping only
-  session and node names):
+  draws user names, IP addresses and ports as stars for video or screen capture, keeping
+  session names and computer names). Motion is calm by design: slow drift, 12 Hz grain,
+  breathing brightness, no per-frame shake:
   phosphor burn-in that fades, quarter-res bloom, RGB shift, jitter, horizontal
   sync tears, static noise, a sweeping glow line and flicker, on top of the
   scanline + subtle barrel overlay. The cursor is a rust-coloured block that

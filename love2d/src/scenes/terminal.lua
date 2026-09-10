@@ -415,7 +415,7 @@ function Term:resize()
   self.aiW.w = self.aiTargetW
 end
 
--- GLOW button: the cool-retro-term stages and the cursor trail together.
+-- RETRO button: the cool-retro-term stages and the cursor trail together.
 function Term:toggleRetro()
   local cfg = self.app.cfg.get()
   cfg.retro = cfg.retro == false
@@ -1182,17 +1182,17 @@ function Term:drawStatus(rec)
     + G.uiWidth(stTxt)
     + 12
     + (idleTxt and G.uiWidth(idleTxt) + 12 or 0)
-  -- GLOW / zoom / PRIVACY buttons sit left of the right-hand hint; the hint
+  -- RETRO / zoom / PRIVACY buttons sit left of the right-hand hint; the hint
   -- shrinks to "F1 help" and the idle counter yields before they are dropped
   local cfgNow = app.cfg.get()
   local toggles = {
-    { id = "retro", label = "GLOW", on = cfgNow.retro ~= false, fn = self.toggleRetro },
+    { id = "retro", label = "RETRO", on = cfgNow.retro ~= false, fn = self.toggleRetro },
     { id = "font", label = (self.zoom or 1) .. "x", on = true, fn = self.cycleZoom },
     { id = "privacy", label = "PRIVACY", on = cfgNow.maskIds == true, fn = self.togglePrivacy },
   }
   local btnW = 12
   for _, b in ipairs(toggles) do
-    b.w = G.uiWidth(b.label) + 12
+    b.w = G.uiWidth(b.label) + 8
     btnW = btnW + b.w + 4
   end
   local core = desired - (idleTxt and G.uiWidth(idleTxt) + 12 or 0)
@@ -1211,7 +1211,7 @@ function Term:drawStatus(rec)
     local bx = leftEdge + 4
     for _, b in ipairs(toggles) do
       G.panel(bx, y + 1, b.w, STATUS_H - 2, b.on and "dblue" or "ink", b.on and "cyan" or "dgray")
-      G.ui(b.label, bx + 6, y + 4, b.on and "yellow" or "gray")
+      G.ui(b.label, bx + 4, y + 4, b.on and "yellow" or "gray")
       local fn = b.fn
       self.buttons[#self.buttons + 1] = {
         id = b.id,

@@ -131,10 +131,24 @@ function C.stars(s)
   return string.rep("*", math.min(#s, 6))
 end
 
--- "user@host[:port]" or its masked form.
+-- True for an address literal (IPv4 / IPv6); those never show in private mode.
+function C.isAddress(host)
+  host = tostring(host or "")
+  return host:match("^%d+%.%d+%.%d+%.%d+$") ~= nil or host:find(":", 1, true) ~= nil
+end
+
+-- The host as shown: a computer name stays, an address becomes stars.
+function C.hostShown(host)
+  if C.private() and (host == nil or host == "" or C.isAddress(host)) then
+    return "****"
+  end
+  return host or ""
+end
+
+-- "user@host[:port]" or its masked form (user and port always starred).
 function C.who(user, host, port)
   if C.private() then
-    return "****@****" .. ((port and port ~= 22) and ":**" or "")
+    return "****@" .. C.hostShown(host) .. ((port and port ~= 22) and ":**" or "")
   end
   local s = (user or "") .. "@" .. (host or "")
   if port and port ~= 22 then
@@ -143,8 +157,8 @@ function C.who(user, host, port)
   return s
 end
 
--- A node's display name: the label if it has one, else the host, which is
--- masked in private mode so an address never doubles as the name.
+-- A node's display name: the label if it has one, else the host (a computer
+-- name stays; an address is starred in private mode).
 function C.nodeName(host, rec)
   if rec and rec.name then
     return rec.name
@@ -152,7 +166,7 @@ function C.nodeName(host, rec)
   if host.label and host.label ~= "" then
     return host.label
   end
-  return C.private() and "****" or (host.host or "")
+  return C.hostShown(host.host)
 end
 
 -- Paths shown in the chrome: the user's own name inside them is masked.
@@ -160,7 +174,11 @@ function C.hidePath(path, user, host)
   if not C.private() or not path then
     return path
   end
-  for _, needle in ipairs({ user, host }) do
+  local needles = { user }
+  if C.isAddress(host) then
+    needles[#needles + 1] = host
+  end
+  for _, needle in ipairs(needles) do
     if needle and needle ~= "" then
       path = path:gsub(needle:gsub("%W", "%%%0"), "****")
     end
