@@ -217,8 +217,11 @@ shell starts; user startup files are not modified. Directory restoration waits
 for a cwd report and quiet prompt, cancels if the user types, and does not save
 the old login directory while the restoration command is queued.
 
-The terminal toolbar exposes Upload and Download. Local file drops and the Mac
-file chooser infer the remote destination from the current cwd and basename.
+The terminal toolbar exposes Upload and Download. Upload opens `scenes/pick.lua`,
+a LÖVE-drawn local file picker fed by the core's async `local` listing job; no
+system dialog is used (an `osascript` chooser from a worker thread stalled the
+app). Local file drops and the picker infer the remote destination from the
+current cwd and basename.
 Cmd/Ctrl-click or right-click on a filename in rendered output infers a download;
 selection handles unquoted spaces. Quoted/escaped names and compiler line suffixes
 are parsed as literal paths, never evaluated. A compact transfer sheet defaults

@@ -2884,6 +2884,125 @@ function M.run(App)
     )
   end
 
+  -- UPLOAD picker: an in-app local browser, never a system dialog
+  do
+    local Pick = require("src.scenes.pick")
+    local Transfer = require("src.scenes.transfer")
+    local requests, popped, picked, kv = {}, nil, nil, {}
+    local state = { state = "running" }
+    local app = {
+      pop = function(ov)
+        popped = ov
+      end,
+      core = {
+        kvGet = function(k)
+          return kv[k] or ""
+        end,
+        kvSet = function(k, v)
+          kv[k] = v
+        end,
+        filesStart = function(_, req)
+          requests[#requests + 1] = req
+          return true
+        end,
+        filesStatus = function()
+          return state
+        end,
+      },
+    }
+    local pk = Pick.new(app, {
+      id = 3,
+      onPick = function(path)
+        picked = path
+      end,
+    })
+    check(
+      "picker lists the home folder through the core, not a shell",
+      #requests == 1 and requests[1].op == "local" and requests[1]["local"] == "~"
+    )
+    state = {
+      state = "done",
+      result = {
+        path = "/Users/me",
+        entries = {
+          { name = ".hidden", dir = false, file = true, size = 1 },
+          { name = "Docs", dir = true, file = false, size = 0 },
+          { name = "a.txt", dir = false, file = true, size = 10 },
+          { name = "brief.md", dir = false, file = true, size = 20 },
+          { name = "pipe", dir = false, file = false, size = 0 },
+        },
+      },
+    }
+    pk:update(0.1)
+    check(
+      "picker shows folders and regular files, hides dot files and specials",
+      #pk.entries == 3 and pk.entries[1].name == "Docs" and pk.path == "/Users/me"
+    )
+    check("picker remembers the folder", kv["files.local"] == "/Users/me")
+    pk:keypressed(".", {})
+    check("dot toggles hidden files", #pk.entries == 4)
+    pk:keypressed(".", {})
+    pk:keypressed("return", {})
+    check(
+      "Enter opens the selected folder",
+      #requests == 2 and requests[2]["local"] == "/Users/me/Docs" and pk.active
+    )
+    pk:keypressed("return", {})
+    check("a listing in flight is not restarted", #requests == 2 and not picked)
+    state = { state = "error", error = "Permission denied" }
+    pk:update(0.1)
+    check(
+      "the pending folder is requested once the current listing lands",
+      #requests == 3 and requests[3]["local"] == "/Users/me/Docs" and not pk.pending
+    )
+    pk:update(0.1)
+    check(
+      "a failed listing keeps the current list and shows the error",
+      pk.error == "Permission denied" and #pk.entries == 3 and not pk.active
+    )
+    pk:textinput("b")
+    check("typing a letter jumps to the matching name", pk.entries[pk.selected].name == "brief.md")
+    pk:keypressed("return", {})
+    check(
+      "Enter on a file closes the picker and hands over the full path",
+      picked == "/Users/me/brief.md" and popped == pk
+    )
+    popped, picked = nil, nil
+    pk = Pick.new(app, {
+      id = 3,
+      onPick = function(path)
+        picked = path
+      end,
+    })
+    check("picker reopens in the last folder", requests[#requests]["local"] == "/Users/me")
+    pk:filedropped("/tmp/dropped.bin")
+    check("a dropped file is picked directly", picked == "/tmp/dropped.bin" and popped == pk)
+    popped = nil
+    pk = Pick.new(app, { id = 3 })
+    pk:keypressed("escape", {})
+    check("Esc closes the picker without picking", popped == pk)
+    -- The transfer sheet never opens a system chooser on its own.
+    local sheet = Transfer.new({
+      sessions = {
+        get = function()
+          return {}
+        end,
+      },
+      core = {
+        cwd = function()
+          return "/srv"
+        end,
+        filesStart = function()
+          error("no dialog expected")
+        end,
+      },
+    }, { id = 3, op = "upload", auto = true })
+    check(
+      "upload without a file shows guidance instead of a system dialog",
+      sheet.error and not sheet.auto and not sheet.picking
+    )
+  end
+
   do
     local Term = require("src.scenes.terminal")
     local pushed, writes = nil, 0

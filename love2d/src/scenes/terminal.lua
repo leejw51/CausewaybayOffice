@@ -247,10 +247,21 @@ function Term:download(path)
   end
   self.app.push("transfer", { id = self.id, op = "download", path = path, auto = path ~= nil })
 end
+-- UPLOAD: an in-app local file picker (scenes/pick.lua); the chosen file
+-- goes straight into the shell folder through the quick transfer sheet.
 function Term:upload()
   self.downloadPicking, self.hotNotePicking = false, false
   self:resetFileCursor()
-  self.app.push("transfer", { id = self.id, op = "upload", auto = true })
+  if self.app.hasOverlay("pick") then
+    return
+  end
+  local app, id = self.app, self.id
+  app.push("pick", {
+    id = id,
+    onPick = function(path)
+      app.push("transfer", { id = id, op = "upload", path = path, auto = true })
+    end,
+  })
 end
 
 -- Context menu (right-click on the grid, wheel over the top bar).

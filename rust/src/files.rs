@@ -55,14 +55,14 @@ fn start_in(
     registry: &Mutex<HashMap<i32, Arc<Job>>>,
 ) -> Result<(), String> {
     let req: Request = serde_json::from_str(request).map_err(|e| e.to_string())?;
-    if !["pick", "local", "list", "stat", "upload", "download"].contains(&req.op.as_str()) {
+    if !["local", "list", "stat", "upload", "download"].contains(&req.op.as_str()) {
         return Err("Unknown file operation".into());
     }
     if req.local.contains('\0') || req.remote.contains('\0') {
         return Err("Invalid path".into());
     }
     let sess = session::get(id).ok_or("Session no longer exists")?;
-    if !["local", "pick"].contains(&req.op.as_str()) && sess.state() != ST_CONNECTED {
+    if req.op != "local" && sess.state() != ST_CONNECTED {
         return Err("Connect the terminal first".into());
     }
     let mut all = lock(registry);
@@ -171,25 +171,6 @@ fn remote_path(sftp: &ssh2::Sftp, path: &str) -> Result<PathBuf, String> {
 }
 fn run(job: &Job, req: &Request) -> Result<Value, String> {
     check(job)?;
-    if req.op == "pick" {
-        #[cfg(target_os = "macos")]
-        {
-            let out = std::process::Command::new("/usr/bin/osascript")
-                .args([
-                    "-e",
-                    "POSIX path of (choose file with prompt \"Upload to terminal folder\")",
-                ])
-                .output()
-                .map_err(|e| e.to_string())?;
-            if !out.status.success() {
-                return Err("File selection cancelled".into());
-            }
-            let path = String::from_utf8(out.stdout).map_err(|e| e.to_string())?;
-            return Ok(json!({"path":path.strip_suffix('\n').unwrap_or(&path)}));
-        }
-        #[cfg(not(target_os = "macos"))]
-        return Err("Drop a local file onto the terminal to upload".into());
-    }
     if req.op == "local" {
         let path = fs::canonicalize(local_path(&req.local)).map_err(|e| e.to_string())?;
         let mut rows = Vec::new();

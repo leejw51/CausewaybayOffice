@@ -240,8 +240,11 @@ for an empty shell prompt; typing or new output cancels a pending folder check.
 ### Upload and download
 
 Use **UPLOAD** / **DOWNLOAD** in the terminal toolbar, or **Ctrl+Shift+U** /
-**Ctrl+Shift+D**. Upload opens the Mac file chooser; dropping a file onto the terminal
-also works. The remote destination uses the shell's current directory and the
+**Ctrl+Shift+D**. Upload opens an in-app file picker (no system dialog): browse with
+the arrows, Enter opens a folder or uploads the selected file, Backspace goes up,
+HOME / DESKTOP / DOWNLOADS / DOCUMENTS jump there, `.` shows hidden files, Ctrl+L
+edits the path and typing a letter jumps to the next matching name. Dropping a
+file onto the terminal also works. The remote destination uses the shell's current directory and the
 original filename automatically.
 
 **Click DOWNLOAD, then click a filename in the terminal output** to download it.

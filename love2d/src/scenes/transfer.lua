@@ -24,12 +24,8 @@ function Transfer.new(app, params)
     self.op, self.source, self.cwd = self.job.op, self.job.source, self.job.cwd
     self.field.value = self.job.destination
   elseif self.op == "upload" and self.source == "" then
-    local ok, err = app.core.filesStart(self.id, { op = "pick" })
-    if ok then
-      self.picking = true
-    else
-      self.error = err
-    end
+    self.auto = nil
+    self.error = "Use UPLOAD to choose a file, or drop one onto the terminal"
   else
     self:paths()
   end
@@ -64,7 +60,7 @@ function Transfer:update(dt)
   if self.silent and self.closing then
     return
   end
-  if self.auto and not self.picking and not self.job then
+  if self.auto and not self.job then
     self.auto = nil
     if self.source ~= "" and self.field.value ~= "" then
       self:start()
@@ -73,17 +69,6 @@ function Transfer:update(dt)
         self.app.pop(self)
         return
       end
-    end
-  end
-  if self.picking then
-    local st = self.app.core.filesStatus(self.id)
-    if st.state == "done" then
-      self.picking = nil
-      self.source = st.result.path
-      self:paths()
-    elseif st.state == "error" or st.state == "cancelled" then
-      self.picking, self.auto = nil, nil
-      self.error = st.error
     end
   end
   if self.job then
@@ -103,7 +88,7 @@ function Transfer:update(dt)
   end
 end
 function Transfer:start()
-  if self.job or self.picking then
+  if self.job then
     return
   end
   if self.remote then
@@ -226,9 +211,6 @@ function Transfer:draw()
   local message = self.error
     or (self.done and "Transfer complete")
     or "Filename filled in. Existing files are kept."
-  if self.picking then
-    message = "Choose a local file..."
-  end
   if self.job then
     local st = self.job.status or {}
     message = string.format(
@@ -256,7 +238,7 @@ function Transfer:draw()
     button("CANCEL", x + 14, 80, function()
       self.app.core.filesCancel(self.id)
     end)
-  elseif not self.done and not self.picking then
+  elseif not self.done then
     button(self.op:upper(), x + 14, 90, function()
       self:start()
     end)
