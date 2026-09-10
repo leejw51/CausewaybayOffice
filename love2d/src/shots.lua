@@ -377,6 +377,110 @@ function M.run(App, phase)
     return
   end
 
+  -- hot note: HOT NOTE -> click a filename -> edit -> Esc uploads it back.
+  if phase == "hotnote" then
+    local connected
+    local dir = love.filesystem.getSaveDirectory() .. "/hot-click"
+    os.execute(string.format("mkdir -p '%s'", dir))
+    local name = "hot" .. os.time() .. ".txt"
+    local remote = dir .. "/" .. name
+    local f = assert(io.open(remote, "wb"))
+    f:write("alpha\nbeta\n")
+    f:close()
+    at(1, function()
+      setMode(1280, 800)
+      App.setOrientation("landscape")
+      connected = App.sessions.open({ host = "localhost", user = os.getenv("USER") or "dev" })
+      App.switch("terminal", { id = connected.id })
+    end)
+    at(3, function()
+      check(
+        "hot note test uses connected real SSH",
+        App.core.state(connected.id) == App.core.ST.CONNECTED
+      )
+      line(string.format("cd '%s'; ls", dir))
+    end)
+    local row, col
+    at(2, function()
+      local sc = term()
+      local tv = sc:view()
+      for r = 0, tv.rows - 1 do
+        local text = tv:rowText(r, 0, tv.cols - 1)
+        local c = text:find(name, 1, true)
+        if c and not text:find("ls", 1, true) then
+          row, col = r, c - 1
+        end
+      end
+      check("ls shows the temp file", row ~= nil)
+      check("shell folder known", App.core.cwd(connected.id) == dir, App.core.cwd(connected.id))
+      local pos = require("src.scenes.terminal").toolbar(App.D, App.G)
+      check("terminal bar shows HOT NOTE", pos["HOT NOTE"] ~= nil)
+      sc:toggleHotNotePick()
+      check("HOT NOTE arms picking", sc.hotNotePicking)
+    end)
+    at(0.4, function()
+      local sc = term()
+      shot("qa_hotnote_pick")
+    end)
+    at(0.4, function()
+      local sc = term()
+      sc:mousepressed(sc.ox + (col + 1.5) * sc.cellW, sc.oy + (row + 0.5) * sc.cellH, 1)
+      check("filename click opens the hot note overlay", App.hasOverlay("hotnote"))
+      local ov = App.top()
+      local deadline = love.timer.getTime() + 30
+      local function poll()
+        if ov.state == "download" and love.timer.getTime() < deadline then
+          fx.after(0.2, poll)
+          return
+        end
+        check(
+          "file downloaded into the editor",
+          ov.state == "edit" and ov.editor:line(1) == "alpha",
+          ov.error
+        )
+        ov:keypressed("down", none)
+        ov:keypressed("end", none)
+        ov:textinput(" 銅鑼灣")
+        ov:keypressed("return", none)
+        ov:textinput("gamma")
+        fx.after(0.3, function()
+          shot("qa_hotnote_edit")
+        end)
+        fx.after(0.6, function()
+          ov:keypressed("escape", none)
+          check("Esc starts the upload", ov.state == "upload")
+          local deadline2 = love.timer.getTime() + 30
+          local function poll2()
+            if ov.state == "upload" and love.timer.getTime() < deadline2 then
+              fx.after(0.2, poll2)
+              return
+            end
+            check(
+              "upload finished and the overlay closed",
+              ov.uploaded and not App.hasOverlay("hotnote"),
+              ov.error
+            )
+            local g = assert(io.open(remote, "rb"))
+            local back = g:read("*a")
+            g:close()
+            check("remote file holds the edit", back == "alpha\nbeta 銅鑼灣\ngamma\n", back)
+            local leftovers = io.popen(string.format("ls -a '%s'", dir)):read("*a")
+            check("no temp or backup files remain", not leftovers:find("cbo%-"), leftovers)
+            fx.after(0.4, function()
+              shot("qa_hotnote_done")
+              os.remove(remote)
+              App.sessions.close(connected.id)
+              finish(0.2)
+            end)
+          end
+          fx.after(0.2, poll2)
+        end)
+      end
+      fx.after(0.2, poll)
+    end)
+    return
+  end
+
   -- kitty graphics: real SSH, the python tool emits every variant, the view
   -- must decode and paint them into the terminal canvas.
   if phase == "kitty" then

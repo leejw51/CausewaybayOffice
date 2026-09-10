@@ -582,3 +582,80 @@ fn typing_state_and_next_command_prediction() {
     assert_eq!(from_c(cbo_session_typing(-1)), "");
     sess.set_state(ST_CLOSED);
 }
+
+/// Notes through the C ABI: stored while recording is off, listed newest
+/// first, found by BM25 and by the offline vector pass, gone after delete.
+#[test]
+fn notes_through_the_c_abi() {
+    let _g = serial();
+    cbo_init();
+    cbo_record_enable(0);
+    embed::set_paused(true);
+    let before = j(cbo_note_list(0)).as_array().map(|a| a.len()).unwrap_or(0);
+
+    let blank = cs("  \n\t");
+    assert_eq!(unsafe { cbo_note_add(blank.as_ptr(), 0) }, -1);
+    assert!(last_error().contains("empty"), "{}", last_error());
+
+    let a = cs("ABI note: rotate the nginx certificate on the causeway box\nsudo certbot renew");
+    let b = cs("ABI note: 銅鑼灣 office wifi is on the whiteboard");
+    let ida = unsafe { cbo_note_add(a.as_ptr(), 7) };
+    let idb = unsafe { cbo_note_add(b.as_ptr(), 0) };
+    assert!(ida > 0 && idb > ida, "ids grow: {} {}", ida, idb);
+    assert_eq!(last_error(), "");
+
+    let list = j(cbo_note_list(0));
+    let list = list.as_array().expect("array");
+    assert_eq!(list.len(), before + 2);
+    assert_eq!(list[0]["id"], idb, "newest first");
+    assert_eq!(list[1]["session_id"], 7);
+    assert!(list[1]["text"].as_str().unwrap_or("").contains("certbot"));
+    assert!(list[0]["ts_ms"].as_i64().unwrap_or(0) > 0);
+    assert_eq!(j(cbo_note_list(1)).as_array().map(|a| a.len()), Some(1));
+
+    let q = cs("銅鑼灣");
+    let k = cs("note");
+    let hits = j(unsafe { cbo_search_bm25(q.as_ptr(), k.as_ptr(), 5) });
+    assert_eq!(hits[0]["id"], idb, "{}", hits);
+    assert_eq!(hits[0]["kind"], "note");
+    assert_eq!(
+        hits[0]["title"],
+        "ABI note: 銅鑼灣 office wifi is on the whiteboard"
+    );
+    // Offline vector pass: an inflection BM25 cannot prefix-match.
+    if cbo_embed_available() == 0 {
+        let q = cs("renewing certificates");
+        let hits = j(unsafe { cbo_search(q.as_ptr(), k.as_ptr(), 5) });
+        assert_eq!(hits[0]["id"], ida, "{}", hits);
+        assert!(hits[0]["sources"]
+            .as_array()
+            .map(|s| s.iter().any(|x| x == "semantic"))
+            .unwrap_or(false));
+        assert_eq!(
+            hits.as_array().map(|a| a.len()),
+            Some(1),
+            "the unrelated note is below the local score floor: {}",
+            hits
+        );
+    }
+    // Notes are part of "" (all kinds) too.
+    let q = cs("whiteboard");
+    let all = j(unsafe { cbo_search_bm25(q.as_ptr(), std::ptr::null(), 5) });
+    assert!(all
+        .as_array()
+        .map(|a| a.iter().any(|h| h["kind"] == "note"))
+        .unwrap_or(false));
+
+    assert_eq!(cbo_note_delete(ida), 0);
+    assert_eq!(cbo_note_delete(ida), -1);
+    assert!(last_error().contains("no such note"));
+    let q = cs("certbot");
+    let gone = j(unsafe { cbo_search(q.as_ptr(), k.as_ptr(), 5) });
+    assert_eq!(gone.as_array().map(|a| a.len()), Some(0), "{}", gone);
+    assert_eq!(cbo_note_delete(idb), 0);
+    assert_eq!(
+        j(cbo_note_list(0)).as_array().map(|a| a.len()),
+        Some(before)
+    );
+    embed::set_paused(false);
+}

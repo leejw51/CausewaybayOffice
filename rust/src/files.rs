@@ -19,6 +19,12 @@ pub struct Request {
     local: String,
     #[serde(default)]
     remote: String,
+    /// Upload only: replace an existing remote file. The bytes go to a
+    /// sibling temp file first and land by an atomic rename, so a failed or
+    /// cancelled upload leaves the original untouched. Used by HOT NOTE,
+    /// which edits a file it just downloaded.
+    #[serde(default)]
+    overwrite: bool,
 }
 struct Job {
     owner: Arc<Session>,
@@ -263,19 +269,67 @@ fn run(job: &Job, req: &Request) -> Result<Value, String> {
         if !meta.is_file() {
             return Err("Select a regular file; folders are not transferred".into());
         }
+        // Overwrite: keep the original's mode, write beside it, rename over it.
+        let existing = if req.overwrite {
+            match sftp.stat(&remote) {
+                Ok(st) if st.is_file() => Some(st),
+                Ok(_) => return Err("Only a regular file can be replaced".into()),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        let target = match &existing {
+            Some(_) => {
+                let name = remote
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file");
+                remote.with_file_name(format!(".{name}.cbo-hot"))
+            }
+            None => remote.clone(),
+        };
+        let mode = existing
+            .as_ref()
+            .and_then(|st| st.perm)
+            .map(|p| (p & 0o777) as i32)
+            .unwrap_or(0o600);
         let mut dst = sftp
             .open_mode(
-                &remote,
+                &target,
                 OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
-                0o600,
+                mode,
                 OpenType::File,
             )
             .map_err(|e| format!("Cannot create remote file (existing files are kept): {e}"))?;
         let result = copy(job, &mut src, &mut dst, meta.len())
             .and_then(|_| dst.close().map_err(|e| e.to_string()));
         drop(dst);
+        let result = result.and_then(|_| {
+            if existing.is_none() {
+                return Ok(());
+            }
+            // SFTP v3 renames never replace a target (OpenSSH answers
+            // "failure" to the overwrite flag), so swap through a backup:
+            // original -> .bak, temp -> original, drop .bak. The original
+            // is restored if the second step fails.
+            let name = remote
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+            let backup = remote.with_file_name(format!(".{name}.cbo-bak"));
+            let _ = sftp.unlink(&backup);
+            sftp.rename(&remote, &backup, None)
+                .map_err(|e| format!("Cannot replace remote file: {e}"))?;
+            if let Err(e) = sftp.rename(&target, &remote, None) {
+                let _ = sftp.rename(&backup, &remote, None);
+                return Err(format!("Cannot replace remote file: {e}"));
+            }
+            let _ = sftp.unlink(&backup);
+            Ok(())
+        });
         if result.is_err() {
-            let _ = sftp.unlink(&remote);
+            let _ = sftp.unlink(&target);
         }
         result?;
     } else {

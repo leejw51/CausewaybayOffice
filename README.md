@@ -49,6 +49,7 @@ UI work.
 | Ctrl+Shift+Space | AI sidekick panel (the grid reflows to the remaining width) |
 | Shift+Tab in the AI panel | Chat <-> notes |
 | AUTO NOTE | Terminal bar: screen -> AI summary -> saved note (the raw capture without a key) |
+| HOT NOTE | Terminal bar: click a filename to download it into an editor; Esc or DONE uploads it back |
 | Ctrl+= / Ctrl+- | Terminal zoom 1x / 2x (also in Settings) |
 | Shift+PgUp / PgDn, wheel | Scrollback |
 | F11 | Fullscreen |
@@ -158,6 +159,17 @@ notes first and the best hits ride along in the system prompt; the bubble shows
 visible screen, asks the model for a short summary when a key exists, and saves
 the summary with the capture underneath (Esc keeps the raw capture; without a
 key the capture is the note). One click from a terminal to a searchable record.
+
+### Hot note: edit a remote file in place
+
+Click **HOT NOTE**, then a filename in the terminal output. The file is
+downloaded over sftp into the app's save directory and opens in a small editor
+(arrows, Home/End, PgUp/PgDn, Cmd+V paste, Cmd+C copies the whole text, Tab
+inserts a tab). **Esc**, **DONE** or Ctrl+S write it back with an overwriting
+upload: the bytes go to a temp file beside the original and are swapped in
+through a backup, so a failed upload leaves the original untouched. **DISCARD**
+closes without uploading. Files over 512 KB, non-UTF-8 or binary files are
+refused. Nothing is typed into the shell; the transfer is a file job.
 
 ## One lobby, two layouts, and automatic Favorites
 

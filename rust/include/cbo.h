@@ -73,10 +73,12 @@ const char* cbo_term_title(int32_t id);      /* OSC 0/2 title, "" if none */
 const char* cbo_term_cwd(int32_t id);        /* remote cwd: OSC 7, else a "user@host: path" title; "" if unknown */
 
 /* Async per-session file job. JSON request: {op: pick/local/list/upload/download,
- * local: path, remote: path}. Paths are literal, never shell commands.
- * One job at a time; start: 0 / -1 + last_error. Status JSON: state
+ * local: path, remote: path, overwrite?: bool}. Paths are literal, never shell
+ * commands. One job at a time; start: 0 / -1 + last_error. Status JSON: state
  * running/done/error/cancelled, op, done/total bytes, result or error.
- * Existing destination files are never overwritten. */
+ * Existing destination files are never overwritten, except an upload with
+ * overwrite: true, which replaces the remote file through a temp file and a
+ * backup swap (the original stays intact on failure). */
 /* Independent read-only stat for terminal links; result contains path, dir,
  * file. Does not replace or block the session's upload/download job. */
 int32_t cbo_files_probe(int32_t id, const char *path);

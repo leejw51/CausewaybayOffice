@@ -1171,6 +1171,361 @@ function M.run(App)
     love.system.getClipboardText, love.system.setClipboardText = origGet, origSet
   end
 
+  -- UI flow through the real terminal scene: keys and clicks only.
+  do
+    local clip, setClip = "", nil
+    local origGet, origSet = love.system.getClipboardText, love.system.setClipboardText
+    love.system.getClipboardText = function()
+      return clip
+    end
+    love.system.setClipboardText = function(t)
+      setClip = t
+    end
+    local shift = { ctrl = false, shift = true, alt = false, gui = false }
+    local ctrlShift = { ctrl = true, shift = true, alt = false, gui = false }
+    local savedScene2, savedName2 = App.scene, App.sceneName
+    local sc = Term.new(App, { id = trec.id })
+    App.scene, App.sceneName = sc, "terminal"
+    sc:enter()
+    sc:keypressed("space", ctrlShift)
+    check(
+      "flow: Ctrl+Shift+Space opens the panel in chat",
+      sc.aiOpen and sc.ai and sc.ai.mode == "chat"
+    )
+    local ai = sc.ai
+    ai:draw(0, 0, 320, 400, 0)
+    local function headerBtn(i)
+      return ai.headerBtns[i]
+    end
+    check("flow: chat header offers NOTES only", #ai.headerBtns == 1)
+    sc:keypressed("tab", shift)
+    check("flow: Shift+Tab reaches note mode", ai.mode == "notes" and ai.input == ai.noteInput)
+    for _, c in ipairs({ "d", "e", "p", "l", "o", "y", " ", "v", "2" }) do
+      sc:textinput(c)
+    end
+    check("flow: typing lands in the note field, not the shell", ai.noteInput.value == "deploy v2")
+    local writes0 = 0
+    local origWrite = Core.write
+    Core.write = function()
+      writes0 = writes0 + 1
+    end
+    sc:keypressed("return", none)
+    Core.write = origWrite
+    check(
+      "flow: Enter saves the note without touching the shell",
+      #ai.notes == 1 and writes0 == 0 and ai.noteInput.value == ""
+    )
+    ai:draw(0, 0, 320, 400, 0)
+    -- PASTE button by click through the scene
+    clip = "pasted from another tool"
+    local pb = ai.pasteButton
+    sc:mousepressed(pb[1] + 2, pb[2] + 2, 1)
+    check("flow: PASTE click saves the clipboard", #ai.notes == 2 and ai.notes[2].text == clip)
+    ai:draw(0, 0, 320, 400, 0)
+    -- bubble buttons by click: READ opens the reader, COPY copies, X deletes
+    local readBtn, copyBtn, xBtn
+    for _, bt in ipairs(ai.bubbleBtns) do
+      -- three buttons per note, in draw order READ, COPY, X (right to left)
+      readBtn = readBtn or bt
+    end
+    local nb = #ai.bubbleBtns
+    xBtn, copyBtn, readBtn = ai.bubbleBtns[nb - 2], ai.bubbleBtns[nb - 1], ai.bubbleBtns[nb]
+    check("flow: six bubble buttons for two notes", nb == 6)
+    sc:mousepressed(copyBtn.x + 1, copyBtn.y + 1, 1)
+    check("flow: COPY click puts the last note on the clipboard", setClip == clip)
+    sc:mousepressed(readBtn.x + 1, readBtn.y + 1, 1)
+    check("flow: READ click opens the reader overlay", App.hasOverlay("note"))
+    local reader = App.top()
+    reader:draw()
+    local outside = reader.frame[1] - 2
+    reader:mousepressed(math.max(0, outside), reader.frame[2] + 4, 1)
+    check("flow: click outside the reader closes it", reader.closing)
+    App.overlays = {}
+    sc:mousepressed(xBtn.x + 1, xBtn.y + 1, 1)
+    check("flow: X click deletes the note", #ai.notes == 1 and #Core.noteList(10) == 1)
+    -- FIND via the header button, Esc leaves FIND, Esc closes the panel
+    ai:draw(0, 0, 320, 400, 0)
+    local findBtn = headerBtn(1) -- drawn right to left: FIND is first
+    sc:mousepressed(findBtn.x + 1, findBtn.y + 1, 1)
+    check("flow: FIND click arms search", ai.finding)
+    sc:textinput("deploy")
+    ai:update(0.016)
+    check("flow: typed query lists the hit", #ai.hits == 1)
+    sc:keypressed("escape", none)
+    check("flow: Esc leaves FIND, panel stays", sc.aiOpen and not ai.finding)
+    sc:keypressed("return", ctrl)
+    check("flow: Ctrl+Enter in note mode opens nothing", #App.overlays == 0)
+    sc:keypressed("escape", none)
+    check("flow: second Esc closes the panel", not sc.aiOpen)
+    -- AUTO NOTE from the tab strip button, then Esc keeps the raw capture
+    sc.screenText = function()
+      return "$ make deploy\nrelease 2.0 shipped"
+    end
+    sc:drawTabStrip(App.sessions.get(trec.id))
+    local autoBtn
+    for _, bt in ipairs(sc.buttons) do
+      if bt.id == "autonote" then
+        autoBtn = bt
+      end
+    end
+    check("flow: tab strip draws AUTO NOTE", autoBtn ~= nil)
+    sc:mousepressed(autoBtn.x + 1, autoBtn.y + 1, 1)
+    sc.buttons = {} -- the strip is not redrawn below; keep its rects out of the panel clicks
+    ai = sc.ai
+    check(
+      "flow: AUTO NOTE opens the panel in note mode with a request",
+      sc.aiOpen and ai.mode == "notes" and ai.auto ~= nil
+    )
+    sc:keypressed("escape", none)
+    Core.update(0.05)
+    ai:update(0.05)
+    local last = ai.notes[#ai.notes]
+    check(
+      "flow: Esc during the summary keeps the raw capture",
+      sc.aiOpen
+        and not ai.auto
+        and last
+        and last.text:find("release 2.0 shipped", 1, true)
+        and not last.text:find("--- screen ---", 1, true)
+    )
+    -- chat: X on a bubble via click, CLEAR ALL via click
+    sc:keypressed("tab", shift)
+    ai.messages = {
+      { role = "user", content = "q1" },
+      { role = "assistant", content = "a1", provider = "openai" },
+    }
+    ai:draw(0, 0, 320, 400, 0)
+    local firstX = ai.bubbleBtns[1] -- X is drawn first, then COPY
+    sc:mousepressed(firstX.x + 1, firstX.y + 1, 1)
+    check(
+      "flow: X click drops the first message",
+      #ai.messages == 1 and ai.messages[1].content == "a1"
+    )
+    ai:draw(0, 0, 320, 400, 0)
+    local clearAll = headerBtn(1)
+    sc:mousepressed(clearAll.x + 1, clearAll.y + 1, 1)
+    check("flow: CLEAR ALL click empties the context", #ai.messages == 0)
+    for _, n in ipairs(Core.noteList(50)) do
+      Core.noteDelete(n.id)
+    end
+    sc:leave()
+    fx.update(1)
+    fx.update(1)
+    check("flow: no scene transition left pending", not fx.transitioning)
+    App.scene, App.sceneName = savedScene2, savedName2
+    love.system.getClipboardText, love.system.setClipboardText = origGet, origSet
+  end
+
+  -- HOT NOTE: editor model, overlay transfer flow, terminal picking
+  do
+    local HotNote = require("src.scenes.hotnote")
+    local E = HotNote.Editor
+    local e = E.new("ab\ncd\r\n")
+    check("editor keeps CRLF and splits lines", e.crlf and #e.lines == 3 and e:line(2) == "cd")
+    e:place(1, 1)
+    e:insert("한글")
+    check("editor inserts UTF-8 at the cursor", e:line(1) == "a한글b" and e.col == 3 and e.dirty)
+    e:newline()
+    check(
+      "editor newline splits the line",
+      e:line(1) == "a한글" and e:line(2) == "b" and e.row == 2 and e.col == 0
+    )
+    e:backspace()
+    check(
+      "editor backspace at column 0 joins lines",
+      e:line(1) == "a한글b" and e.row == 1 and e.col == 3
+    )
+    e:delete()
+    check("editor delete removes the next char", e:line(1) == "a한글")
+    e:eol()
+    e:delete()
+    check("editor delete at end joins the next line", e:line(1) == "a한글cd" and #e.lines == 2)
+    e:move(0, -100)
+    check("editor moves clamp", e.col == 0 and e.row == 1)
+    e:move(0, -1)
+    check("editor left at column 0 stays on the first line", e.row == 1 and e.col == 0)
+    e:insert("x\ny")
+    check(
+      "editor multi-line paste",
+      e:line(1) == "x" and e:line(2) == "ya한글cd" and e.row == 2 and e.col == 1
+    )
+    check("editor text round trip uses the file's line ending", e:text() == "x\r\nya한글cd\r\n")
+    check("editor empty text is one line", #E.new("").lines == 1 and E.new(""):text() == "")
+
+    -- overlay: fake core file jobs
+    local status, requests = {}, {}
+    local fakeCore = {
+      filesStart = function(_, req)
+        requests[#requests + 1] = req
+        status = { state = "running", op = req.op }
+        return true
+      end,
+      filesStatus = function()
+        return status
+      end,
+      filesCancel = function()
+        status = { state = "cancelled" }
+      end,
+      cwd = function()
+        return "/srv/app"
+      end,
+    }
+    local popped, toasts = nil, {}
+    local fakeApp = {
+      core = fakeCore,
+      D = App.D,
+      G = App.G,
+      audio = { play = function() end },
+      toast = function(t)
+        toasts[#toasts + 1] = t
+      end,
+      pop = function(ov)
+        popped = ov
+      end,
+      sessions = {
+        get = function()
+          return nil
+        end,
+      },
+    }
+    local hn = HotNote.new(fakeApp, { id = 3, remote = "/srv/app/config.yml" })
+    check(
+      "hot note starts a download into the save dir",
+      hn.state == "download"
+        and requests[1].op == "download"
+        and requests[1].remote == "/srv/app/config.yml"
+        and requests[1]["local"]:find("/hotnotes/", 1, true)
+    )
+    local f = assert(io.open(requests[1]["local"], "wb"))
+    f:write("name: cbo\nport: 22\n")
+    f:close()
+    status = { state = "done", op = "download" }
+    hn:update(0.016)
+    check(
+      "hot note opens the editor on the downloaded text",
+      hn.state == "edit" and hn.editor:line(2) == "port: 22"
+    )
+    hn:draw()
+    check("hot note editor draws DONE, COPY, DISCARD", #hn.buttons == 3)
+    hn:keypressed("escape", none)
+    check("Esc on an unchanged file closes without an upload", popped == hn and #requests == 1)
+    popped = nil
+    hn:keypressed("end", none)
+    hn:textinput("22")
+    hn:keypressed("escape", none)
+    check(
+      "Esc on a changed file uploads with overwrite",
+      hn.state == "upload"
+        and requests[2].op == "upload"
+        and requests[2].overwrite == true
+        and requests[2].remote == "/srv/app/config.yml"
+        and not popped
+    )
+    local g = assert(io.open(requests[2]["local"], "rb"))
+    local written = g:read("*a")
+    g:close()
+    check("the local copy holds the edit before the upload", written == "name: cbo22\nport: 22\n")
+    status = { state = "error", op = "upload", error = "Cannot replace remote file" }
+    hn:update(0.016)
+    check(
+      "upload error keeps the editor open with the message",
+      hn.state == "edit" and hn.error and not popped
+    )
+    hn:keypressed("s", ctrl)
+    status = { state = "done", op = "upload" }
+    hn:update(0.016)
+    check(
+      "Ctrl+S retries and a finished upload closes",
+      hn.uploaded and popped == hn and toasts[#toasts]:find("Uploaded")
+    )
+    os.remove(requests[1]["local"])
+    -- refusals
+    local bin = HotNote.new(fakeApp, { id = 3, remote = "/srv/app/a.bin" })
+    local bf = assert(io.open(requests[#requests]["local"], "wb"))
+    bf:write("ab\0cd")
+    bf:close()
+    status = { state = "done", op = "download" }
+    bin:update(0.016)
+    check("binary files are refused", bin.state == "error" and bin.error:find("not a text file"))
+    os.remove(requests[#requests]["local"])
+    -- a download failure at start
+    fakeCore.filesStart = function()
+      return false, "busy"
+    end
+    local failed = HotNote.new(fakeApp, { id = 3, remote = "/x" })
+    check("download start failure is shown", failed.state == "error" and failed.error == "busy")
+    failed:draw()
+    -- terminal picking
+    local Term = require("src.scenes.terminal")
+    local pushed
+    local app2 = {
+      D = { vh = 200, vw = 900 },
+      G = App.G,
+      audio = { play = function() end },
+      toast = function() end,
+      core = {
+        cwd = function()
+          return "/srv/app"
+        end,
+        write = function() end,
+      },
+      push = function(name, params)
+        pushed = { name = name, params = params }
+      end,
+    }
+    local sc = Term.new(app2, { id = 7 })
+    local tv = { cols = 14, rows = 1, cells = {}, sel = {} }
+    for i = 1, 14 do
+      tv.cells[i - 1] = { cp = ("config.yml    "):byte(i), width = 1 }
+    end
+    function tv:selectedText()
+      return nil
+    end
+    sc.view = function()
+      return tv
+    end
+    sc.cellAt = function(_, x)
+      return math.floor(x / 8), 0
+    end
+    sc.ox, sc.oy, sc.gw, sc.gh, sc.top = 0, 16, 112, 16, 16
+    check("terminal bar lists HOT NOTE", Term.toolbar({ vw = 900 }, App.G)["HOT NOTE"] ~= nil)
+    sc:toggleHotNotePick()
+    check(
+      "HOT NOTE arms picking and disarms download picking",
+      sc.hotNotePicking and not sc.downloadPicking
+    )
+    sc:toggleDownloadPick()
+    check(
+      "DOWNLOAD picking replaces HOT NOTE picking",
+      sc.downloadPicking and not sc.hotNotePicking
+    )
+    sc:toggleDownloadPick()
+    sc:toggleHotNotePick()
+    sc:mousepressed(12, 20, 1)
+    check(
+      "filename click opens the editor on the resolved remote path",
+      pushed
+        and pushed.name == "hotnote"
+        and pushed.params.remote == "/srv/app/config.yml"
+        and not sc.hotNotePicking
+    )
+    pushed = nil
+    sc:toggleHotNotePick()
+    sc:keypressed("escape", none)
+    check("Esc cancels HOT NOTE picking", not sc.hotNotePicking and not pushed)
+    app2.core.cwd = function()
+      return ""
+    end
+    check(
+      "relative name without a shell folder is refused",
+      not sc:hotNote("config.yml") and not pushed
+    )
+    check(
+      "absolute path works without a shell folder",
+      sc:hotNote("/etc/hosts") and pushed.params.remote == "/etc/hosts"
+    )
+  end
+
   -- session limit
   lib.reset()
   Sessions.init(Core)
@@ -1295,7 +1650,7 @@ function M.run(App)
         Term.titleRows(D, rec, G) == 2
       )
       check("narrow strip drops RENAME and AUTO NOTE", Term.toolbar(D, G)["RENAME"] == nil)
-      D.vw = 960
+      D.vw = 1100
       check("wide terminal keeps name beside the buttons", Term.titleRows(D, rec, G) == 1)
       check("wide strip shows RENAME and AUTO NOTE", Term.toolbar(D, G)["AUTO NOTE"] ~= nil)
       check("no record: single tab row", Term.titleRows(D, nil, G) == 1)

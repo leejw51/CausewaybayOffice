@@ -310,3 +310,20 @@ fn utf8_width_matches_matrix() {
     assert_eq!(utf8_width(""), 0);
     assert_eq!(utf8_width("你好 안녕 こんにちは Příliš"), 27);
 }
+
+#[test]
+fn note_entry_points_survive_bad_input() {
+    cbo_init();
+    let null: *const std::ffi::c_char = std::ptr::null();
+    assert_eq!(unsafe { cbo_note_add(null, 0) }, -1);
+    assert!(!from_c(cbo_last_error()).is_empty());
+    assert_eq!(cbo_note_delete(-5), -1);
+    assert_eq!(cbo_note_delete(i64::MAX), -1);
+    let list = from_c(cbo_note_list(-1));
+    assert!(list.starts_with('['), "{}", list);
+    let list = from_c(cbo_note_list(i32::MAX));
+    assert!(list.starts_with('['), "{}", list);
+    let huge = cs(&"x".repeat(cbo_core::notes::MAX_CHARS + 1));
+    assert_eq!(unsafe { cbo_note_add(huge.as_ptr(), 0) }, -1);
+    assert!(from_c(cbo_last_error()).contains("longer"));
+}

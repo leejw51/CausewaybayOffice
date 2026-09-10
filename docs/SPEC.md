@@ -276,3 +276,13 @@ its columns and scrolls. Dialogs size their content to their actual frame.
   auto-note request are independent.
 * **Mock core** keeps notes in memory with a term-overlap search so the UI and
   the in-engine suite work without the dylib.
+* **HOT NOTE** (terminal bar): `Term:toggleHotNotePick` arms picking, a
+  filename click resolves the path against the shell folder and pushes
+  `scenes/hotnote.lua`, which downloads the file (file job, `op: download`)
+  into `<save dir>/hotnotes/<time>-<name>`, edits it (`HotNote.Editor`, a
+  pure line/cursor model) and on Esc / DONE / Ctrl+S uploads with
+  `overwrite: true`. The core writes the upload to `.<name>.cbo-hot`, renames
+  the original to `.<name>.cbo-bak`, renames the temp into place and removes
+  the backup (SFTP v3 has no overwriting rename); the original is restored if
+  the swap fails. Unchanged files are not uploaded. Refused: > 512 KB, NUL
+  bytes, invalid UTF-8.

@@ -31,6 +31,7 @@ local TAB_BUTTONS = {
   { "DOWNLOAD", false },
   { "RENAME", false, 440 },
   { "AUTO NOTE", false, 440 },
+  { "HOT NOTE", false, 440 },
 }
 local STATUS_H = 16
 local PAD = 4
@@ -182,6 +183,7 @@ end
 function Term:toggleDownloadPick()
   self:resetFileCursor()
   self.downloadPicking = not self.downloadPicking
+  self.hotNotePicking = false
   self.dragging = false
   self:view().sel = nil
   self.completionBox, self.transferBox = nil, nil
@@ -190,8 +192,38 @@ function Term:toggleDownloadPick()
   end
 end
 
-function Term:download(path)
+-- HOT NOTE: arm picking; the next filename click downloads the file into an
+-- editor overlay that uploads it back when closed (scenes/hotnote.lua).
+function Term:toggleHotNotePick()
+  self:resetFileCursor()
+  self.hotNotePicking = not self.hotNotePicking
   self.downloadPicking = false
+  self.dragging = false
+  self:view().sel = nil
+  self.completionBox, self.transferBox = nil, nil
+  if self.hotNotePicking then
+    self.app.toast("Click a filename to edit it. Esc cancels.")
+  end
+end
+
+-- Open the editor on a remote file named in the terminal (relative to the
+-- shell folder when not absolute).
+function Term:hotNote(name)
+  self.hotNotePicking = false
+  self:resetFileCursor()
+  local Paths = require("src.terminal_files")
+  local path = Paths.resolve(self.app.core.cwd(self.id), name)
+  if not path then
+    self.app.toast("Shell folder unknown: run cd first or use an absolute path")
+    self.app.audio.play("error")
+    return false
+  end
+  self.app.push("hotnote", { id = self.id, remote = path })
+  return true
+end
+
+function Term:download(path)
+  self.downloadPicking, self.hotNotePicking = false, false
   self:resetFileCursor()
   if not path then
     local mx, my = self.app.D.toVirtual(love.mouse.getPosition())
@@ -200,7 +232,7 @@ function Term:download(path)
   self.app.push("transfer", { id = self.id, op = "download", path = path, auto = path ~= nil })
 end
 function Term:upload()
-  self.downloadPicking = false
+  self.downloadPicking, self.hotNotePicking = false, false
   self:resetFileCursor()
   self.app.push("transfer", { id = self.id, op = "upload", auto = true })
 end
@@ -656,8 +688,8 @@ end
 
 function Term:keypressed(key, m)
   self.folderProbe, self.folderClick = nil, nil
-  if key == "escape" and self.downloadPicking then
-    self.downloadPicking = false
+  if key == "escape" and (self.downloadPicking or self.hotNotePicking) then
+    self.downloadPicking, self.hotNotePicking = false, false
     self:resetFileCursor()
     self.lastEsc = -1
     return
@@ -851,6 +883,13 @@ function Term:mousepressed(mx, my, b)
     self.ai:mousepressed(mx, my, b)
     return
   end
+  if self.hotNotePicking then
+    local path = self:fileTarget(mx, my)
+    if path then
+      self:hotNote(path)
+    end
+    return
+  end
   if self.downloadPicking then
     local path = self:fileTarget(mx, my)
     if path then
@@ -957,7 +996,7 @@ function Term:drawFileLink(tv, zoom)
   local cx, cy = self:cellAt(mx, my)
   local token = require("src.terminal_files").at(tv, cx, cy)
   local folderLink = token and token.directory and self:canNavigate()
-  if self.downloadPicking or folderLink then
+  if self.downloadPicking or self.hotNotePicking or folderLink then
     local kind = token and "hand" or "crosshair"
     self.fileCursors = self.fileCursors or {}
     self.fileCursors[kind] = self.fileCursors[kind] or love.mouse.getSystemCursor(kind)
@@ -974,10 +1013,12 @@ function Term:drawFileLink(tv, zoom)
   end
   self.fileHint = (
     self.downloadPicking and "Click to download "
+    or (self.hotNotePicking and "Click to edit ")
     or (folderLink and "Click to cd: " or "Click folder: cd / Cmd+click file: download ")
   ) .. token.name
   if
     self.downloadPicking
+    or self.hotNotePicking
     or folderLink
     or love.keyboard.isDown("lgui", "rgui", "lctrl", "rctrl")
   then
@@ -1110,7 +1151,7 @@ function Term:drawTabStrip(rec)
     local lift = (self.hover[id] and self.hover[id].lift) or 0
     local by = pos.y + 1 - math.floor(lift + 0.5)
     G.frame(x, by, w, TAB_H - 2, 1)
-    if id == "download" and self.downloadPicking then
+    if (id == "download" and self.downloadPicking) or (id == "hotnote" and self.hotNotePicking) then
       G.panel(x, by, w, TAB_H - 2, "dblue", "cyan")
     end
     if icon then
@@ -1140,6 +1181,9 @@ function Term:drawTabStrip(rec)
   end)
   button("autonote", "AUTO NOTE", nil, function()
     self:autoNote()
+  end)
+  button("hotnote", "HOT NOTE", nil, function()
+    self:toggleHotNotePick()
   end)
   x = endX + 4
   G.drawFrame(G.ledStrip(8), Lobby.ledFrame(G, ST, rec.state, self.t), x, rowY + 4, 1, 1)
@@ -1299,21 +1343,23 @@ function Term:drawStatus(rec)
   end
   G.ui(right, rightX, y + 5, "gray")
   self.completionBox, self.transferBox = nil, nil
-  if self.downloadPicking then
-    local hint = "DOWNLOAD: click filename  |  Esc cancel"
+  if self.downloadPicking or self.hotNotePicking then
+    local verb = self.hotNotePicking and "Edit" or "Download"
+    local hint = (self.hotNotePicking and "HOT NOTE" or "DOWNLOAD")
+      .. ": click filename  |  Esc cancel"
     if G.uiWidth(hint) > vw - 16 then
       hint = "Click filename / Esc cancel"
     end
     G.panel(4, y + 1, vw - 8, STATUS_H - 2, "ink", "cyan")
     if self.hoverFilename then
       local cancel = "Esc cancel"
-      local label = "Download " .. self.hoverFilename
+      local label = verb .. " " .. self.hoverFilename
       local utf8 = require("utf8")
       local width = vw - G.uiWidth(cancel) - 32
       while #label > 0 and G.uiWidth(label .. "…") > width do
         label = label:sub(1, (utf8.offset(label, -1) or 1) - 1)
       end
-      if label ~= "Download " .. self.hoverFilename then
+      if label ~= verb .. " " .. self.hoverFilename then
         label = label .. "…"
       end
       G.ui(label, 8, y + 5, "yellow")

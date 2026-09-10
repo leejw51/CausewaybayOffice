@@ -115,6 +115,47 @@ fn sftp_roundtrip_and_shell_cwd_without_test_hook() {
         );
     }
     assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    // HOT NOTE path: an upload with overwrite replaces the remote file in
+    // place through a temp sibling; the folder ends up without leftovers.
+    let edited = root.join("edited.txt");
+    std::fs::write(&edited, b"edited by hot note\n").unwrap();
+    let hot = job(
+        id,
+        json!({"op":"upload", "local":edited, "remote":remote, "overwrite":true}),
+    );
+    assert_eq!(hot["state"], "done", "{hot}");
+    let check_dl = root.join("after-overwrite.txt");
+    let dl = job(
+        id,
+        json!({"op":"download", "local":check_dl, "remote":remote}),
+    );
+    assert_eq!(dl["state"], "done", "{dl}");
+    assert_eq!(std::fs::read(&check_dl).unwrap(), b"edited by hot note\n");
+    let list = job(id, json!({"op":"list", "remote":root}));
+    assert!(
+        !list["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| {
+                let n = v["name"].as_str().unwrap_or("");
+                n.ends_with(".cbo-hot") || n.ends_with(".cbo-bak")
+            }),
+        "no temp or backup file left behind: {list}"
+    );
+    // overwrite on a missing target simply creates it
+    let fresh = root.join("fresh.txt");
+    let made = job(
+        id,
+        json!({"op":"upload", "local":edited, "remote":fresh, "overwrite":true}),
+    );
+    assert_eq!(made["state"], "done", "{made}");
+    // overwrite never turns a folder into a file
+    let bad = job(
+        id,
+        json!({"op":"upload", "local":edited, "remote":root, "overwrite":true}),
+    );
+    assert_eq!(bad["state"], "error", "{bad}");
     let cancelled_remote = root.join("cancelled.bin");
     let req = cs(&json!({"op":"upload", "local":source, "remote":cancelled_remote}).to_string());
     assert_eq!(unsafe { cbo_files_start(id, req.as_ptr()) }, 0);
