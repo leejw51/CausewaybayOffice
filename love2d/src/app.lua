@@ -201,11 +201,12 @@ local function loadScene(name, params)
 end
 
 function App.lobbyView()
-  return Config.get().lobbyView == "map" and "map" or "map2"
+  local view = Config.get().lobbyView
+  return (view == "map" or view == "map3") and view or "map2"
 end
 
 local function rememberLobby(name)
-  if (name == "map" or name == "map2") and Config.get().lobbyView ~= name then
+  if (name == "map" or name == "map2" or name == "map3") and Config.get().lobbyView ~= name then
     Config.get().lobbyView = name
     Config.save()
   end
@@ -219,7 +220,7 @@ function App.switch(name, params)
   if name == "lobby" then
     name = App.lobbyView()
   end
-  if name == App.sceneName and (name == "map" or name == "map2") then
+  if name == App.sceneName and (name == "map" or name == "map2" or name == "map3") then
     return true
   end
   require("src.ui").flush()
@@ -234,8 +235,10 @@ function App.switch(name, params)
     fx.fadeIn(0.6)
     return true
   end
-  local outgoing = (App.sceneName == "map" or App.sceneName == "map2") and name == "terminal"
-  local incoming = App.sceneName == "terminal" and (name == "map" or name == "map2")
+  local outgoing = (App.sceneName == "map" or App.sceneName == "map2" or App.sceneName == "map3")
+    and name == "terminal"
+  local incoming = App.sceneName == "terminal"
+    and (name == "map" or name == "map2" or name == "map3")
   if incoming then
     params = params or {}
     params.select = App.scene.id

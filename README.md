@@ -443,3 +443,19 @@ Change `cbo.h` and `cbo_cdef.lua` together (via `make cdef`) or not at all.
 ## License
 
 [MIT](LICENSE). The bundled fonts keep their own licenses listed above.
+
+### Map 3 monitor wall
+
+Choose **MAP 3** in the lobby for a live tile grid: one retro monitor per session, displaying its complete current terminal grid. Rust generation tracking and shared LÖVE canvases avoid rebuilding unchanged screens. Wheel or +/- zooms, drag pans, Space focuses the selected monitor, and 0 / Fit All restores the wall. Select with a click or arrow keys; Enter or double-click opens the terminal. Zoom and focus use fast exponential easing. Scrollback is available inside the terminal.
+
+On Mac, two-finger trackpad scrolling pans Map 3 in both directions; hold Command while scrolling to zoom. +/- also zooms, and click-drag pans. Native pinch is not currently supported.
+
+Map 3 tiles use Apple-inspired 16-bit computer artwork: ivory CRT housings, rainbow badges, floppy slots and matching keyboards. The casing follows each tile’s portrait or landscape proportions.
+
+Map 3 opens at **100 VIEW** density, leaving room for 100 sessions on one page. **FIT ALL** enlarges the currently open sessions to fill the page; **100 VIEW** restores the hundred-session overview. Zoom or Focus inspects small screens.
+
+Map 3 includes − / + zoom buttons, a zoom percentage, and a search field for session name, user, host or port. Click the search field (or Tab) to type; Escape clears it.
+
+**SIMULATE** shows 100 isolated animated fake terminals; **STOP SIM** returns to real sessions. Commander sends the text plus Enter to all currently shown connected nodes; **SEND N** shows the recipient count. Start with `pwd` or `ls`. **CAT** and **BTC** broadcast harmless ASCII-art printf commands. Simulation handles these locally without connections. Map 3 saves its zoom, pan, density, search and selection; simulation is temporary.
+
+For a multi-session banner, enter up to eight words in Commander and click **ART**. It supports English letters, digits and `! ? . -`, with a 128-character limit. Clear search to include all connected sessions. Generated lines wrap at ten letters; long output is also available in terminal scrollback.

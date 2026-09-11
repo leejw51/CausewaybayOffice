@@ -1,4 +1,4 @@
--- Both lobby layouts share the same selector; the chosen layout is home.
+-- All lobby layouts share the same selector; the chosen layout is home.
 local M = {}
 
 function M.disconnect(app, buttons, rec, right, y, focus)
@@ -28,8 +28,8 @@ end
 function M.draw(app, buttons, current, right, y)
   local G = app.G
   local w = G.uiWidth("MAP 1") + 14
-  local x = right - w * 2 - 4
-  for i, name in ipairs({ "map", "map2" }) do
+  local x = right - w * 3 - 8
+  for i, name in ipairs({ "map", "map2", "map3" }) do
     local bx = x + (i - 1) * (w + 4)
     local selected = current == name
     G.panel(bx, y, w, 20, selected and "dblue" or "ink", selected and "cyan" or "gray")

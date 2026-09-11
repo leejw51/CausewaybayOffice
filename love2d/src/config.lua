@@ -35,7 +35,8 @@ local function defaults()
     keyClicks = false,
     sound = true,
     seenTermHint = false,
-    lobbyView = "map2", -- map (Map 1) | map2 (Map 2)
+    map3View = { capacity = "100", query = "", selected = 0, x = 0, y = 0, zoom = 1 },
+    lobbyView = "map2", -- map (Map 1) | map2 (Map 2) | map3 (Monitor wall)
     display = "window", -- window | fullscreen
     orientation = "auto", -- auto | landscape | portrait
     orientationFor = "", -- window shape a forced orientation was chosen for
@@ -75,7 +76,7 @@ function C.load()
     end
   end
   local d = C.data
-  if d.lobbyView ~= "map" then
+  if d.lobbyView ~= "map" and d.lobbyView ~= "map3" then
     d.lobbyView = "map2"
   end
   if d.phosphor ~= "off" and d.phosphor ~= "green" and d.phosphor ~= "white" then

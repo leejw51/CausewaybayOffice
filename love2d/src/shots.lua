@@ -168,6 +168,54 @@ function M.run(App, phase)
   if require("src.shots_p3").run(App, phase, H) then
     return
   end
+  if phase == "commander" then
+    H.at(1, function()
+      App.switch("map3")
+    end)
+    H.at(1, function()
+      App.scene:toggleSimulation()
+      App.scene.command.value = "CAUSEWAY BAY OFFICE"
+      App.scene:sendWordArt()
+    end)
+    H.at(2, function()
+      H.shot("qa_commander_100")
+    end)
+    H.at(0.5, function()
+      App.scene:focus()
+    end)
+    H.at(1, function()
+      H.shot("qa_commander_focus")
+    end)
+    H.finish(0.5)
+    return
+  end
+  if phase == "monitors" or phase == "monitors100" then
+    H.at(1, function()
+      assert(App.core.mock, "monitor gallery requires --mock")
+      for i = 1, (phase == "monitors100" and 100 or 5) do
+        App.sessions.open({
+          host = "retro-" .. i,
+          user = "demo",
+          cols = 80,
+          rows = 24,
+          noRemember = true,
+        })
+      end
+      H.setMode(1080, 1920)
+      App.switch("map3")
+    end)
+    H.at(2, function()
+      H.shot("qa_retro_monitors")
+    end)
+    H.at(0.5, function()
+      H.setMode(1500, 900)
+    end)
+    H.at(1, function()
+      H.shot("qa_retro_monitors_wide")
+    end)
+    H.finish(0.5)
+    return
+  end
   if phase == "polish" then
     require("src.shots_polish").run(App, H)
     return
