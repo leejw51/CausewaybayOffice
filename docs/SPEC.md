@@ -1,4 +1,4 @@
-# CAUSEWAYBAY OFFICE — MVP spec (v0.1.0)
+# CAUSEWAYBAY OFFICE — MVP spec (v0.1.1)
 
 A retro 8-bit terminal SSH client that feels like an MSX2 / Amiga / Genesis game
 but is built for real office work: ssh, coding, and an AI sidekick.

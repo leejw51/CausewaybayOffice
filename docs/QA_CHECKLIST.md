@@ -1,4 +1,4 @@
-# QA CHECKLIST — CAUSEWAYBAY OFFICE v0.1.0
+# QA CHECKLIST — CAUSEWAYBAY OFFICE v0.1.1
 
 Manual acceptance script, derived from SPEC.md acceptance 1–5. Run on macOS
 with Rust, LÖVE 11.5 at `~/Applications/love.app`, and a local sshd
@@ -9,7 +9,7 @@ Before starting:
 
 ```bash
 cd /Volumes/nvidia/vivid/CausewaybayOffice
-make version                  # prints 0.1.0
+make version                  # prints 0.1.1
 ssh -o BatchMode=yes localhost true && echo "ssh ok"   # agent/key auth must work non-interactively
 ```
 

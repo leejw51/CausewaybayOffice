@@ -1,6 +1,14 @@
 # ROADMAP
 
-## v0.1.0 — MVP (current)
+## v0.1.1 — AI Assist coding agent (current)
+
+* Write and run code through the connected SSH terminal, with visible progress.
+* Confine automatic file writes to the current workspace; review shell commands
+  and operations outside that folder.
+* Configure tools and API keys, and connect MCP clients through a hardened
+  loopback server.
+
+## v0.1.0 — MVP
 
 Scope is the acceptance list in [SPEC.md](SPEC.md):
 

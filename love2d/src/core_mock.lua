@@ -399,7 +399,7 @@ end
 function M.cbo_init() end
 
 function M.cbo_version()
-  return "mock-0.1.0"
+  return "mock-0.1.1"
 end
 
 function M.cbo_last_error()

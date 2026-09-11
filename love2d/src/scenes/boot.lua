@@ -118,7 +118,7 @@ function Boot:draw()
     G.ui(msg, mx + 1, math.floor(vh * 0.9) + 1, "black", 0.6 * blink)
     G.ui(msg, mx, math.floor(vh * 0.9), "yellow", blink)
   end
-  G.ui("v0.1.0  core " .. app.core.version, 6, vh - 12, "gray", 0.7)
+  G.ui("v0.1.1  core " .. app.core.version, 6, vh - 12, "gray", 0.7)
 end
 
 return Boot
