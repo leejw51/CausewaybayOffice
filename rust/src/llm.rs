@@ -57,6 +57,192 @@ impl Provider {
     }
 }
 
+/// A streamed function call, complete once the stream ends.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolCall {
+    pub index: usize,
+    pub id: String,
+    pub name: String,
+    /// JSON text of the arguments (fragments concatenated; "{}" when empty).
+    pub arguments: String,
+}
+
+impl ToolCall {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "id": self.id,
+            "name": self.name,
+            "arguments": if self.arguments.trim().is_empty() { "{}".to_string() } else { self.arguments.clone() },
+        })
+    }
+}
+
+/// One fragment of a streamed function call. `id`/`name` arrive on the first
+/// fragment of a call; `arguments` fragments concatenate into JSON text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolDelta {
+    pub index: usize,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub arguments: String,
+}
+
+/// The neutral tool shape the UI sends: [{name, description, parameters}]
+/// (parameters = JSON schema object, optional). Converted per provider.
+fn tools_for(provider: Provider, tools: Option<&Value>) -> Option<Vec<Value>> {
+    let list = tools?.as_array()?;
+    let out: Vec<Value> = list
+        .iter()
+        .filter_map(|t| {
+            let name = t.get("name")?.as_str()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let description = t
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("")
+                .to_string();
+            let schema = t
+                .get("parameters")
+                .filter(|p| p.is_object())
+                .cloned()
+                .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+            Some(match provider {
+                Provider::Anthropic => json!({
+                    "name": name, "description": description, "input_schema": schema,
+                }),
+                Provider::OpenAi | Provider::Xai => json!({
+                    "type": "function",
+                    "function": {"name": name, "description": description, "parameters": schema},
+                }),
+            })
+        })
+        .collect();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Arguments as a JSON object for Anthropic `tool_use` blocks (a string is parsed).
+fn args_object(v: Option<&Value>) -> Value {
+    match v {
+        Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+            .ok()
+            .filter(|p| p.is_object())
+            .unwrap_or_else(|| json!({})),
+        Some(o) if o.is_object() => o.clone(),
+        _ => json!({}),
+    }
+}
+
+/// Arguments as JSON text for OpenAI-style `function.arguments`.
+fn args_text(v: Option<&Value>) -> String {
+    match v {
+        Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+        Some(o) if o.is_object() => o.to_string(),
+        _ => "{}".to_string(),
+    }
+}
+
+/// Convert the neutral message list into the provider's wire shape.
+///
+/// Neutral messages: `{role: user|assistant, content}`; an assistant message
+/// may carry `tool_calls: [{id, name, arguments}]`; a tool result is
+/// `{role: "tool", tool_call_id, name?, content}`. Anthropic needs every
+/// result of one assistant turn in a single following user message, so
+/// consecutive tool results merge into one message there.
+pub fn normalize_messages(provider: Provider, messages: &Value) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let Some(list) = messages.as_array() else {
+        return out;
+    };
+    for m in list {
+        let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+        let content = m.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        let calls = m.get("tool_calls").and_then(|c| c.as_array());
+        match (provider, role) {
+            (_, "assistant") if calls.is_some_and(|c| !c.is_empty()) => {
+                let calls = calls.unwrap_or(&Vec::new()).clone();
+                match provider {
+                    Provider::Anthropic => {
+                        let mut blocks = Vec::new();
+                        if !content.is_empty() {
+                            blocks.push(json!({"type": "text", "text": content}));
+                        }
+                        for c in &calls {
+                            blocks.push(json!({
+                                "type": "tool_use",
+                                "id": c.get("id").and_then(|i| i.as_str()).unwrap_or(""),
+                                "name": c.get("name").and_then(|n| n.as_str()).unwrap_or(""),
+                                "input": args_object(c.get("arguments")),
+                            }));
+                        }
+                        out.push(json!({"role": "assistant", "content": blocks}));
+                    }
+                    Provider::OpenAi | Provider::Xai => {
+                        let tool_calls: Vec<Value> = calls
+                            .iter()
+                            .map(|c| {
+                                json!({
+                                    "id": c.get("id").and_then(|i| i.as_str()).unwrap_or(""),
+                                    "type": "function",
+                                    "function": {
+                                        "name": c.get("name").and_then(|n| n.as_str()).unwrap_or(""),
+                                        "arguments": args_text(c.get("arguments")),
+                                    },
+                                })
+                            })
+                            .collect();
+                        let mut msg = json!({"role": "assistant", "tool_calls": tool_calls});
+                        msg["content"] = if content.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::String(content.to_string())
+                        };
+                        out.push(msg);
+                    }
+                }
+            }
+            (Provider::Anthropic, "tool") => {
+                let block = json!({
+                    "type": "tool_result",
+                    "tool_use_id": m.get("tool_call_id").and_then(|i| i.as_str()).unwrap_or(""),
+                    "content": content,
+                });
+                let merged = out.last_mut().filter(|last| {
+                    last.get("role").and_then(|r| r.as_str()) == Some("user")
+                        && last
+                            .get("content")
+                            .and_then(|c| c.as_array())
+                            .and_then(|a| a.first())
+                            .and_then(|b| b.get("type"))
+                            .and_then(|t| t.as_str())
+                            == Some("tool_result")
+                });
+                match merged
+                    .and_then(|last| last.get_mut("content"))
+                    .and_then(|c| c.as_array_mut())
+                {
+                    Some(arr) => arr.push(block),
+                    None => out.push(json!({"role": "user", "content": [block]})),
+                }
+            }
+            (Provider::OpenAi | Provider::Xai, "tool") => {
+                out.push(json!({
+                    "role": "tool",
+                    "tool_call_id": m.get("tool_call_id").and_then(|i| i.as_str()).unwrap_or(""),
+                    "content": content,
+                }));
+            }
+            _ => out.push(json!({"role": role, "content": content})),
+        }
+    }
+    out
+}
+
 /// Build the JSON request body for a provider.
 pub fn build_body(
     provider: Provider,
@@ -64,6 +250,19 @@ pub fn build_body(
     system: Option<&str>,
     messages: &Value,
 ) -> Value {
+    build_body_tools(provider, model, system, messages, None)
+}
+
+/// `build_body` with an optional neutral tool list.
+pub fn build_body_tools(
+    provider: Provider,
+    model: &str,
+    system: Option<&str>,
+    messages: &Value,
+    tools: Option<&Value>,
+) -> Value {
+    let messages = normalize_messages(provider, messages);
+    let tools = tools_for(provider, tools);
     match provider {
         Provider::Anthropic => {
             let mut body = json!({
@@ -75,6 +274,9 @@ pub fn build_body(
             if let Some(sys) = system.filter(|s| !s.is_empty()) {
                 body["system"] = Value::String(sys.to_string());
             }
+            if let Some(t) = tools {
+                body["tools"] = Value::Array(t);
+            }
             body
         }
         Provider::OpenAi | Provider::Xai => {
@@ -82,14 +284,16 @@ pub fn build_body(
             if let Some(sys) = system.filter(|s| !s.is_empty()) {
                 all.push(json!({"role": "system", "content": sys}));
             }
-            if let Some(arr) = messages.as_array() {
-                all.extend(arr.iter().cloned());
-            }
-            json!({
+            all.extend(messages);
+            let mut body = json!({
                 "model": model,
                 "stream": true,
                 "messages": all,
-            })
+            });
+            if let Some(t) = tools {
+                body["tools"] = Value::Array(t);
+            }
+            body
         }
     }
 }
@@ -100,6 +304,9 @@ pub enum SseEvent {
     /// Nothing interesting (comment, empty, keepalive, non-text delta).
     Nothing,
     Text(String),
+    /// Function-call fragments (OpenAI `tool_calls` deltas, Anthropic
+    /// `tool_use` blocks and `input_json_delta`s).
+    Tools(Vec<ToolDelta>),
     Done,
     Error(String),
 }
@@ -128,13 +335,50 @@ pub fn parse_sse_line(provider: Provider, line: &str) -> SseEvent {
                 return SseEvent::Error(error_message(err));
             }
             let choice = v.get("choices").and_then(|c| c.get(0));
-            if let Some(text) = choice
-                .and_then(|c| c.get("delta"))
+            let delta = choice.and_then(|c| c.get("delta"));
+            if let Some(text) = delta
                 .and_then(|d| d.get("content"))
                 .and_then(|c| c.as_str())
             {
                 if !text.is_empty() {
                     return SseEvent::Text(text.to_string());
+                }
+            }
+            if let Some(calls) = delta
+                .and_then(|d| d.get("tool_calls"))
+                .and_then(|t| t.as_array())
+            {
+                let deltas: Vec<ToolDelta> = calls
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let f = c.get("function");
+                        ToolDelta {
+                            index: c
+                                .get("index")
+                                .and_then(|x| x.as_u64())
+                                .map(|x| x as usize)
+                                .unwrap_or(i),
+                            id: c
+                                .get("id")
+                                .and_then(|x| x.as_str())
+                                .filter(|x| !x.is_empty())
+                                .map(str::to_string),
+                            name: f
+                                .and_then(|f| f.get("name"))
+                                .and_then(|x| x.as_str())
+                                .filter(|x| !x.is_empty())
+                                .map(str::to_string),
+                            arguments: f
+                                .and_then(|f| f.get("arguments"))
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        }
+                    })
+                    .collect();
+                if !deltas.is_empty() {
+                    return SseEvent::Tools(deltas);
                 }
             }
             SseEvent::Nothing
@@ -144,18 +388,54 @@ pub fn parse_sse_line(provider: Provider, line: &str) -> SseEvent {
                 Ok(v) => v,
                 Err(_) => return SseEvent::Nothing,
             };
+            let index = v
+                .get("index")
+                .and_then(|i| i.as_u64())
+                .map(|i| i as usize)
+                .unwrap_or(0);
             match v.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                "content_block_start" => {
+                    let block = v.get("content_block");
+                    let is_tool = block.and_then(|b| b.get("type")).and_then(|t| t.as_str())
+                        == Some("tool_use");
+                    if !is_tool {
+                        return SseEvent::Nothing;
+                    }
+                    SseEvent::Tools(vec![ToolDelta {
+                        index,
+                        id: block
+                            .and_then(|b| b.get("id"))
+                            .and_then(|x| x.as_str())
+                            .map(str::to_string),
+                        name: block
+                            .and_then(|b| b.get("name"))
+                            .and_then(|x| x.as_str())
+                            .map(str::to_string),
+                        arguments: String::new(),
+                    }])
+                }
                 "content_block_delta" => {
                     let delta = v.get("delta");
-                    let is_text = delta
+                    let kind = delta
                         .and_then(|d| d.get("type"))
                         .and_then(|t| t.as_str())
-                        .map(|t| t == "text_delta")
-                        .unwrap_or(false);
-                    if is_text {
+                        .unwrap_or("");
+                    if kind == "text_delta" {
                         if let Some(t) = delta.and_then(|d| d.get("text")).and_then(|t| t.as_str())
                         {
                             return SseEvent::Text(t.to_string());
+                        }
+                    } else if kind == "input_json_delta" {
+                        if let Some(p) = delta
+                            .and_then(|d| d.get("partial_json"))
+                            .and_then(|t| t.as_str())
+                        {
+                            return SseEvent::Tools(vec![ToolDelta {
+                                index,
+                                id: None,
+                                name: None,
+                                arguments: p.to_string(),
+                            }]);
                         }
                     }
                     SseEvent::Nothing
@@ -196,6 +476,8 @@ pub struct LlmReq {
     pub cancel: AtomicBool,
     pub delta: Mutex<String>,
     pub error: Mutex<String>,
+    /// Function calls assembled from the stream, in call order.
+    pub calls: Mutex<Vec<ToolCall>>,
 }
 
 impl LlmReq {
@@ -205,7 +487,43 @@ impl LlmReq {
             cancel: AtomicBool::new(false),
             delta: Mutex::new(String::new()),
             error: Mutex::new(String::new()),
+            calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Fold a stream fragment into the call list (keyed by stream index).
+    pub fn push_tool_delta(&self, d: ToolDelta) {
+        let mut calls = lock(&self.calls);
+        let call = match calls.iter_mut().find(|c| c.index == d.index) {
+            Some(c) => c,
+            None => {
+                calls.push(ToolCall {
+                    index: d.index,
+                    ..ToolCall::default()
+                });
+                calls.last_mut().expect("just pushed")
+            }
+        };
+        if let Some(id) = d.id {
+            call.id = id;
+        }
+        if let Some(name) = d.name {
+            call.name = name;
+        }
+        call.arguments.push_str(&d.arguments);
+    }
+
+    /// The assembled calls as JSON `[{id, name, arguments}]` (meaningful once DONE).
+    pub fn calls_json(&self) -> String {
+        let calls = lock(&self.calls);
+        Value::Array(
+            calls
+                .iter()
+                .filter(|c| !c.name.is_empty())
+                .map(ToolCall::to_json)
+                .collect(),
+        )
+        .to_string()
     }
 
     pub fn state(&self) -> i32 {
@@ -295,6 +613,8 @@ pub struct StartArgs {
     pub model: Option<String>,
     pub system: Option<String>,
     pub messages_json: String,
+    /// Neutral tool list JSON (see `normalize_messages`); None = no tools.
+    pub tools_json: Option<String>,
 }
 
 /// Validate arguments, allocate a request slot and start streaming.
@@ -313,7 +633,23 @@ pub fn start(args: StartArgs) -> Result<i32, String> {
         .model
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| provider.default_model().to_string());
-    let body = build_body(provider, &model, args.system.as_deref(), &messages);
+    let tools = match args.tools_json.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(t) => Some(
+            serde_json::from_str::<Value>(t)
+                .map_err(|e| format!("tools_json is not valid JSON: {}", e))?,
+        ),
+        None => None,
+    };
+    if tools.as_ref().is_some_and(|t| !t.is_array()) {
+        return Err("tools_json must be a JSON array".into());
+    }
+    let body = build_body_tools(
+        provider,
+        &model,
+        args.system.as_deref(),
+        &messages,
+        tools.as_ref(),
+    );
 
     let req = Arc::new(LlmReq::new());
     let id = {
@@ -423,6 +759,15 @@ fn run(req: &LlmReq, provider: Provider, api_key: &str, body: Value) -> Result<(
                     delta.push_str(&t);
                 }
             }
+            SseEvent::Tools(deltas) => {
+                for d in deltas {
+                    received = received.saturating_add(d.arguments.len());
+                    if received > MAX_STREAM_BYTES {
+                        return Err("response exceeded size limit".into());
+                    }
+                    req.push_tool_delta(d);
+                }
+            }
             SseEvent::Done => return Ok(()),
             SseEvent::Error(msg) => return Err(msg),
         }
@@ -480,7 +825,7 @@ mod tests {
                     break;
                 }
                 SseEvent::Error(e) => panic!("unexpected error: {}", e),
-                SseEvent::Nothing => {}
+                SseEvent::Tools(_) | SseEvent::Nothing => {}
             }
         }
         (text, done)
@@ -576,6 +921,7 @@ mod tests {
             model: None,
             system: None,
             messages_json: "not json".into(),
+            tools_json: None,
         });
         assert!(bad.is_err());
         let bad = start(StartArgs {
@@ -584,7 +930,137 @@ mod tests {
             model: None,
             system: None,
             messages_json: "[]".into(),
+            tools_json: None,
         });
         assert!(bad.is_err());
+    }
+
+    const OPENAI_TOOL_STREAM: &str = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_screen\",\"arguments\":\"\"}}]}}]}\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"li\"}}]}}]}\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"nes\\\":5}\"}}]}}]}\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_2\",\"function\":{\"name\":\"save_note\",\"arguments\":\"{}\"}}]}}]}\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n",
+        "data: [DONE]\n",
+    );
+
+    const ANTHROPIC_TOOL_STREAM: &str = concat!(
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Looking.\"}}\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read_screen\",\"input\":{}}}\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"lines\\\":\"}}\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"5}\"}}\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":1}\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n",
+        "data: {\"type\":\"message_stop\"}\n",
+    );
+
+    fn assemble(provider: Provider, stream: &str) -> (String, Vec<ToolCall>) {
+        let req = LlmReq::new();
+        let mut text = String::new();
+        for line in stream.lines() {
+            match parse_sse_line(provider, line) {
+                SseEvent::Text(t) => text.push_str(&t),
+                SseEvent::Tools(ds) => {
+                    for d in ds {
+                        req.push_tool_delta(d);
+                    }
+                }
+                SseEvent::Done => break,
+                SseEvent::Error(e) => panic!("{}", e),
+                SseEvent::Nothing => {}
+            }
+        }
+        let calls = lock(&req.calls).clone();
+        assert_eq!(
+            serde_json::from_str::<Value>(&req.calls_json())
+                .unwrap()
+                .as_array()
+                .map(|a| a.len()),
+            Some(calls.len())
+        );
+        (text, calls)
+    }
+
+    #[test]
+    fn openai_tool_calls_assemble_by_index() {
+        let (text, calls) = assemble(Provider::OpenAi, OPENAI_TOOL_STREAM);
+        assert_eq!(text, "");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "read_screen");
+        assert_eq!(calls[0].arguments, "{\"lines\":5}");
+        assert_eq!(calls[1].name, "save_note");
+        assert_eq!(calls[1].to_json()["arguments"], "{}");
+    }
+
+    #[test]
+    fn anthropic_tool_use_assembles() {
+        let (text, calls) = assemble(Provider::Anthropic, ANTHROPIC_TOOL_STREAM);
+        assert_eq!(text, "Looking.");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "toolu_1");
+        assert_eq!(calls[0].name, "read_screen");
+        assert_eq!(calls[0].arguments, "{\"lines\":5}");
+    }
+
+    #[test]
+    fn tools_and_results_follow_provider_shape() {
+        let tools = json!([
+            {"name": "read_screen", "description": "screen text",
+             "parameters": {"type": "object", "properties": {"lines": {"type": "integer"}}}},
+            {"name": "", "description": "dropped"},
+        ]);
+        let msgs = json!([
+            {"role": "user", "content": "what is on screen?"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "name": "read_screen", "arguments": "{\"lines\":5}"}]},
+            {"role": "tool", "tool_call_id": "c1", "name": "read_screen", "content": "$ ls"},
+            {"role": "tool", "tool_call_id": "c2", "name": "x", "content": "y"},
+            {"role": "assistant", "content": "It shows ls."},
+        ]);
+        let o = build_body_tools(Provider::OpenAi, "gpt-5", None, &msgs, Some(&tools));
+        let ot = o["tools"].as_array().unwrap();
+        assert_eq!(ot.len(), 1);
+        assert_eq!(ot[0]["type"], "function");
+        assert_eq!(ot[0]["function"]["name"], "read_screen");
+        let om = o["messages"].as_array().unwrap();
+        assert_eq!(om.len(), 5);
+        assert_eq!(
+            om[1]["tool_calls"][0]["function"]["arguments"],
+            "{\"lines\":5}"
+        );
+        assert!(om[1]["content"].is_null());
+        assert_eq!(om[2]["role"], "tool");
+        assert_eq!(om[2]["tool_call_id"], "c1");
+
+        let a = build_body_tools(
+            Provider::Anthropic,
+            "claude-opus-5",
+            None,
+            &msgs,
+            Some(&tools),
+        );
+        let at = a["tools"].as_array().unwrap();
+        assert_eq!(at[0]["input_schema"]["type"], "object");
+        let am = a["messages"].as_array().unwrap();
+        // user, assistant(tool_use), user(two tool_results merged), assistant
+        assert_eq!(am.len(), 4);
+        assert_eq!(am[1]["content"][0]["type"], "tool_use");
+        assert_eq!(am[1]["content"][0]["input"]["lines"], 5);
+        assert_eq!(am[2]["role"], "user");
+        assert_eq!(am[2]["content"].as_array().map(|c| c.len()), Some(2));
+        assert_eq!(am[2]["content"][0]["type"], "tool_result");
+        assert_eq!(am[2]["content"][1]["tool_use_id"], "c2");
+        assert_eq!(am[3]["content"], "It shows ls.");
+
+        // no tools: bodies stay exactly as before
+        let plain = build_body(
+            Provider::OpenAi,
+            "gpt-5",
+            None,
+            &json!([{"role":"user","content":"hi"}]),
+        );
+        assert!(plain.get("tools").is_none());
     }
 }

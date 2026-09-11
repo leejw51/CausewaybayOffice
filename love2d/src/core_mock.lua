@@ -860,23 +860,79 @@ end
 local LOREM =
   "Sure. First, check the process list:\n\n  ps aux | grep love\n\nThen tail the log while you reproduce it:\n\n  tail -f ~/Library/Logs/cbo.log\n\nIf the socket is stuck, `lsof -i :22` shows who holds it. 香港加油 — ship it before the typhoon signal goes up. Příliš žluťoučký kůň úpěl ďábelské ódy."
 
+-- The core hands Lua the calls as JSON where `arguments` is itself a JSON
+-- *string*; build that through the encoder instead of escaping a literal.
+local function mockCalls(calls)
+  local json = require("src.json")
+  local rows = {}
+  for i, c in ipairs(calls) do
+    rows[i] = { id = c.id, name = c.name, arguments = json.encode(c.args) }
+  end
+  return json.encode(rows)
+end
+
 function M.cbo_llm_start(provider, apiKey, model, system, messagesJson)
+  return M.cbo_llm_start_tools(provider, apiKey, model, system, messagesJson, nil)
+end
+
+-- The fake model. The last user message decides the answer:
+--   "screen"        -> a read_screen tool call (needs the tool to be offered)
+--   "define a tool" -> a define_tool call that adds `disk_usage`
+--   "cbo_ping"      -> the exact text CBO_PONG (the playground's ping)
+--   "hello"         -> a greeting before the lorem text
+-- A request whose last message is a tool result streams the lorem answer, so
+-- the UI's whole tool loop runs without a network.
+--
+-- The message list is decoded rather than pattern-matched: an assistant turn
+-- carries the model's own text (brackets, quotes, newlines), which no regex
+-- over the raw JSON can reliably step over.
+function M.cbo_llm_start_tools(provider, apiKey, model, system, messagesJson, toolsJson)
   local req = 0
   while llms[req] do
     req = req + 1
   end
   provider = type(provider) == "string" and provider or ffi.string(provider)
   local text = LOREM
-  if messagesJson and type(messagesJson) == "string" then
-    local last = messagesJson:match('"content":"([^"]*)"[^%[]*$')
-    if last and last:lower():find("hello") then
-      text = "Hi. " .. text
+  local calls = "[]"
+  local messages = type(messagesJson) == "string" and require("src.json").decode(messagesJson)
+    or nil
+  local lastMsg = type(messages) == "table" and messages[#messages] or nil
+  if type(lastMsg) == "table" and lastMsg.role == "user" then
+    local q = tostring(lastMsg.content or ""):lower()
+    if q:find("cbo_ping") then
+      text = "CBO_PONG"
+    elseif q:find("hello") then
+      text = "Hi. " .. LOREM
+    end
+    if toolsJson then
+      if q:find("screen") and toolsJson:find('"read_screen"') then
+        calls = mockCalls({
+          { id = "call_mock_1", name = "read_screen", args = { lines = "10" } },
+        })
+        text = ""
+      elseif q:find("define a tool") and toolsJson:find('"define_tool"') then
+        calls = mockCalls({
+          {
+            id = "call_mock_2",
+            name = "define_tool",
+            args = {
+              name = "disk_usage",
+              description = "disk usage of a path",
+              command = "du -sh {path}",
+              params = "path",
+            },
+          },
+        })
+        text = ""
+      end
     end
   end
   llms[req] = {
     provider = provider,
     model = model,
-    text = "[" .. provider .. "/" .. tostring(model or "default") .. "] " .. text,
+    text = text == "" and ""
+      or ("[" .. provider .. "/" .. tostring(model or "default") .. "] " .. text),
+    calls = calls,
     pos = 0,
     state = LLM.PENDING,
     startAt = clock + 0.4,
@@ -884,6 +940,11 @@ function M.cbo_llm_start(provider, apiKey, model, system, messagesJson)
     err = "",
   }
   return req
+end
+
+function M.cbo_llm_take_calls(req)
+  local r = llms[req]
+  return r and r.calls or "[]"
 end
 
 function M.cbo_llm_state(req)
@@ -973,6 +1034,8 @@ function M.update(dt)
         if r.pos >= #r.text then
           r.state = LLM.DONE
         end
+      elseif #r.text == 0 then
+        r.state = LLM.DONE -- a pure tool-call turn has no text
       end
     end
   end

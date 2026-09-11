@@ -768,7 +768,10 @@ function M.run(App)
   App.scene = Term.new(App, { id = trec.id })
   App.sceneName = "terminal"
   App.scene:enter()
-  local origWrite = Core.write
+  local origWrite, originalMods = Core.write, Keys.mods
+  Keys.mods = function()
+    return none
+  end
   local captured = ""
   Core.write = function(_, bytes)
     captured = captured .. bytes
@@ -788,7 +791,7 @@ function M.run(App)
       badBytes[#badBytes + 1] = str .. " (per char)"
     end
   end
-  Core.write = origWrite
+  Core.write, Keys.mods = origWrite, originalMods
   App.scene, App.sceneName = savedScene, savedName
   check(
     "unicode: textinput -> Core.write bytes exact (8 strings x 2 paths)",
@@ -1001,18 +1004,28 @@ function M.run(App)
     )
     check("ai clear ignores a bad index", not ctx:clearMessage(9) and #ctx.messages == 2)
     ctx:draw(0, 0, 300, 300, 0)
-    check("ai bubbles expose COPY and X buttons", #ctx.bubbleBtns == 4, #ctx.bubbleBtns)
-    local hasClearAll = false
-    for _, bt in ipairs(ctx.headerBtns) do
-      hasClearAll = hasClearAll or bt.fn ~= nil
-    end
-    check("ai header has mode and clear-all buttons", #ctx.headerBtns == 2 and hasClearAll)
+    check(
+      "ai bubbles expose READ, COPY and X buttons",
+      #ctx:bubbleButtons("READ") == 2
+        and #ctx:bubbleButtons("COPY") == 2
+        and #ctx:bubbleButtons("X") == 2
+    )
+    check(
+      "ai header offers notes, setup, terminal focus and clear",
+      ctx:headerButton("NOTES")
+        and ctx:headerButton("SETUP")
+        and ctx:headerButton("TERM")
+        and ctx:headerButton("CLEAR")
+    )
     check(
       "ai clear all empties the context",
       ctx:clearAll() and #ctx.messages == 0 and not ctx:clearAll()
     )
     ctx:draw(0, 0, 300, 300, 0)
-    check("ai clear all button hides with an empty context", #ctx.headerBtns == 1)
+    check(
+      "ai clear all button hides with an empty context",
+      ctx:headerButton("CLEAR") == nil and ctx:headerButton("NOTES") ~= nil
+    )
     ctx:close()
   end
 
@@ -1088,13 +1101,13 @@ function M.run(App)
       notesPanel:cancel() and not notesPanel.finding and notesPanel.hits[1] == nil
     )
     notesPanel:draw(0, 0, 300, 300, 0)
-    notesPanel.headerBtns[2].fn() -- CHAT (drawn right to left after FIND)
+    notesPanel:headerButton("CHAT").fn()
     check(
       "CHAT header button returns to chat",
       notesPanel.mode == "chat" and notesPanel.input == notesPanel.chatInput
     )
     notesPanel:draw(0, 0, 300, 300, 0)
-    notesPanel.headerBtns[1].fn() -- NOTES
+    notesPanel:headerButton("NOTES").fn()
     check("NOTES header button returns to notes", notesPanel.mode == "notes")
     -- no key and no mock: AUTO NOTE saves the raw capture at once
     local Config2 = require("src.config")
@@ -1226,10 +1239,13 @@ function M.run(App)
     )
     local ai = sc.ai
     ai:draw(0, 0, 320, 400, 0)
-    local function headerBtn(i)
-      return ai.headerBtns[i]
+    local function headerBtn(label)
+      return ai:headerButton(label)
     end
-    check("flow: chat header offers NOTES only", #ai.headerBtns == 1)
+    check(
+      "flow: chat header offers notes, keys, AGI, MCP and focus",
+      headerBtn("NOTES") and headerBtn("SETUP") and headerBtn("TERM")
+    )
     sc:keypressed("tab", shift)
     check("flow: Shift+Tab reaches note mode", ai.mode == "notes" and ai.input == ai.noteInput)
     for _, c in ipairs({ "d", "e", "p", "l", "o", "y", " ", "v", "2" }) do
@@ -1254,15 +1270,14 @@ function M.run(App)
     sc:mousepressed(pb[1] + 2, pb[2] + 2, 1)
     check("flow: PASTE click saves the clipboard", #ai.notes == 2 and ai.notes[2].text == clip)
     ai:draw(0, 0, 320, 400, 0)
-    -- bubble buttons by click: READ opens the reader, COPY copies, X deletes
-    local readBtn, copyBtn, xBtn
-    for _, bt in ipairs(ai.bubbleBtns) do
-      -- three buttons per note, in draw order READ, COPY, X (right to left)
-      readBtn = readBtn or bt
-    end
-    local nb = #ai.bubbleBtns
-    xBtn, copyBtn, readBtn = ai.bubbleBtns[nb - 2], ai.bubbleBtns[nb - 1], ai.bubbleBtns[nb]
-    check("flow: six bubble buttons for two notes", nb == 6)
+    -- bubble buttons by label; the last of each set belongs to the newest note
+    local reads, copies, xs =
+      ai:bubbleButtons("READ"), ai:bubbleButtons("COPY"), ai:bubbleButtons("X")
+    local readBtn, copyBtn, xBtn = reads[#reads], copies[#copies], xs[#xs]
+    check(
+      "flow: READ, COPY and X on each of the two notes",
+      #reads == 2 and #copies == 2 and #xs == 2 and #ai.bubbleBtns == 6
+    )
     sc:mousepressed(copyBtn.x + 1, copyBtn.y + 1, 1)
     check("flow: COPY click puts the last note on the clipboard", setClip == clip)
     sc:mousepressed(readBtn.x + 1, readBtn.y + 1, 1)
@@ -1277,7 +1292,7 @@ function M.run(App)
     check("flow: X click deletes the note", #ai.notes == 1 and #Core.noteList(10) == 1)
     -- FIND via the header button, Esc leaves FIND, Esc closes the panel
     ai:draw(0, 0, 320, 400, 0)
-    local findBtn = headerBtn(1) -- drawn right to left: FIND is first
+    local findBtn = headerBtn("FIND")
     sc:mousepressed(findBtn.x + 1, findBtn.y + 1, 1)
     check("flow: FIND click arms search", ai.finding)
     sc:textinput("deploy")
@@ -1327,14 +1342,14 @@ function M.run(App)
       { role = "assistant", content = "a1", provider = "openai" },
     }
     ai:draw(0, 0, 320, 400, 0)
-    local firstX = ai.bubbleBtns[1] -- X is drawn first, then COPY
+    local firstX = ai:bubbleButtons("X")[1]
     sc:mousepressed(firstX.x + 1, firstX.y + 1, 1)
     check(
       "flow: X click drops the first message",
       #ai.messages == 1 and ai.messages[1].content == "a1"
     )
     ai:draw(0, 0, 320, 400, 0)
-    local clearAll = headerBtn(1)
+    local clearAll = headerBtn("CLEAR")
     sc:mousepressed(clearAll.x + 1, clearAll.y + 1, 1)
     check("flow: CLEAR ALL click empties the context", #ai.messages == 0)
     for _, n in ipairs(Core.noteList(50)) do
@@ -3207,6 +3222,7 @@ function M.run(App)
   end
 
   require("src.test_lobby_ui").run(App, check)
+  require("src.test_ai").run(App, check)
 
   if fails == 0 then
     print("OK " .. n .. " tests")

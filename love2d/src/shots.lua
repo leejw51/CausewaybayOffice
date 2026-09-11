@@ -172,6 +172,289 @@ function M.run(App, phase)
     require("src.shots_polish").run(App, H)
     return
   end
+  if phase == "codeagent" or phase == "codeagentgo" then
+    require("src.shots_codeagent").run(App, H, phase == "codeagentgo" and "go" or "rust")
+    return
+  end
+
+  -- The assist page: chat with a code answer, the AGI tabs and a practice,
+  -- against the real core: local practice, explicit command completion and
+  -- MCP delivery. Also capture the responsive layout for visual review.
+  if phase == "assist" then
+    local Tools = require("src.tools")
+    at(3.2, function()
+      setMode(1280, 800)
+      connectLocalhost()
+    end)
+    at(0.6, function()
+      typeText("localhost")
+      key("return")
+    end)
+    at(1.5, function()
+      key("return")
+    end)
+    at(1.4, function()
+      local sc = term()
+      check("assist: terminal is up", sc ~= nil)
+      line("ls")
+    end)
+    at(0.8, function()
+      local sc = term()
+      sc:toggleAI()
+    end)
+    at(0.6, function()
+      local sc = term()
+      local ai = sc.ai
+      check("assist: panel open", ai ~= nil)
+      ai.input.value = ""
+      ai.harnessNote = nil
+      ai.messages = {
+        { role = "user", content = "how do I watch the log and grep it?" },
+        {
+          role = "assistant",
+          provider = "openai",
+          content = "Tail it, then filter:\n```sh\ntail -f /var/log/system.log | grep -i error\n```\nPress RUN to send it, PRACTICE to type it yourself.",
+        },
+        {
+          role = "tool",
+          name = "read_screen",
+          tool_call_id = "t1",
+          content = "m4max ~% ls\nCargo.toml  README.md  src  target",
+        },
+      }
+      ai.scrollTarget = 0
+      ai.scroll = 0
+      shot("assist_chat_code")
+      info(
+        "assist: text scale",
+        string.format("%.2f (ui=%d zoom=%d)", ai:textScale(), D.s, D.termZoom)
+      )
+      check(
+        "assist: body text is terminal sized",
+        math.abs(ai:textScale() - D.termZoom / D.s) < 1e-6
+      )
+    end)
+    at(0.3, function()
+      -- In a short landscape panel the code row starts below the fold.
+      -- Scroll it into view just as a user would before clicking PRACTICE.
+      local ai = term().ai
+      ai.followBottom = false
+      ai.scrollTarget = 48
+    end)
+    at(0.6, function()
+      local ai = term().ai
+      check(
+        "assist: PRACTICE starts from the code block",
+        (function()
+          local button = ai:bubbleButton("PRACTICE")
+          if not button then
+            return false
+          end
+          button.fn()
+          return ai.practice ~= nil and not ai.focusTerm
+        end)()
+      )
+    end)
+    at(0.5, function()
+      local sc = term()
+      sc.practiceScreen = sc:screenText()
+      sc:textinput("tail -f /var")
+      shot("assist_practice")
+      check("assist: practice tracks the typing", sc.ai.practice.typed == "tail -f /var")
+    end)
+    at(0.6, function()
+      -- captureScreenshot fires at the end of the frame: only tear the
+      -- practice down once the shot above has actually been taken.
+      local sc = term()
+      check("assist: local practice never changed the shell", sc:screenText() == sc.practiceScreen)
+      sc:keypressed("return", none)
+      check("assist: wrong practice line stays local", sc.ai.practice.errors == 1)
+      sc.ai:stopPractice()
+      sc:openAgi("tools")
+    end)
+    at(0.6, function()
+      shot("assist_agi_tools")
+      check("assist: AGI page open", App.hasOverlay("agi"))
+    end)
+    at(0.5, function()
+      local agi = App.top()
+      agi:openForm(nil)
+      agi.form.fields[1][2].value = "ports"
+      agi.form.fields[2][2].value = "listening ports"
+      agi.form.fields[3][2].value = "lsof -i -P -n | grep LISTEN"
+      shot("assist_agi_form")
+    end)
+    at(0.5, function()
+      local agi = App.top()
+      check(
+        "assist: a tool added from the page is live",
+        agi:saveForm() and Tools.find("ports") ~= nil
+      )
+      shot("assist_agi_after_add")
+    end)
+    at(0.5, function()
+      App.top():setTab("keys")
+    end)
+    at(0.5, function()
+      shot("assist_agi_keys")
+    end)
+    at(0.5, function()
+      App.top():setTab("play")
+    end)
+    at(0.5, function()
+      local agi = App.top()
+      agi.play.prompt.value = "cbo_ping from the shot harness"
+      check("assist: playground sends", agi:playSend(nil, false))
+    end)
+    at(6, function()
+      local agi = App.top()
+      shot("assist_agi_play")
+      -- This phase runs the real core: with a provider key the request is a
+      -- real one, so report what came back rather than requiring a reply.
+      if agi.play.req then
+        info("assist: playground still streaming", agi.play.status)
+      elseif agi.play.status:find("^OK") then
+        check("assist: playground reports a working provider", true, agi.play.status)
+      else
+        info("assist: playground reported a failure (no key or provider error)", agi.play.status)
+      end
+      agi:setTab("mcp")
+    end)
+    at(0.5, function()
+      local agi = App.top()
+      check(
+        "assist: MCP starts",
+        (function()
+          agi:toggleMcp()
+          return App.core.mcpInfo().running == true
+        end)()
+      )
+      local url = App.core.mcpInfo().url
+      info("assist: mcp url", require("src.scenes.agi").redactMcpUrl(url))
+      -- A real MCP client: POST office_send over the socket the way Claude
+      -- Code would, then let App's poll deliver it to the page.
+      -- A long-bracket string keeps the backslashes literal, which is what
+      -- JSON needs, and the body travels in a file so the shell never sees
+      -- the backticks of the fenced block.
+      local body =
+        [[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"office_send","arguments":{"text":"From Claude Code:\n```\ngit status --short\n```","title":"review"}}}]]
+      local path = os.tmpname()
+      local file = io.open(path, "w")
+      if file then
+        file:write(body)
+        file:close()
+      end
+      local pipe = io.popen(
+        "curl -sS --max-time 5 -X POST -H 'Content-Type: application/json' --data-binary @'"
+          .. path
+          .. "' '"
+          .. url
+          .. "' 2>/dev/null"
+      )
+      local reply = pipe and pipe:read("*a") or ""
+      if pipe then
+        pipe:close()
+      end
+      os.remove(path)
+      check(
+        "assist: the MCP server answers a real tools/call",
+        reply:find("delivered", 1, true) ~= nil,
+        reply
+      )
+      shot("assist_agi_mcp")
+    end)
+    at(0.6, function()
+      App.pop(App.top())
+    end)
+    at(1.2, function()
+      local ai = term().ai
+      local last = ai.messages[#ai.messages]
+      check(
+        "assist: the MCP message reached the assist page",
+        last ~= nil and last.provider == "mcp" and last.content:find("git status", 1, true) ~= nil,
+        last and last.content
+      )
+      ai.scrollTarget = math.huge
+      shot("assist_mcp_bubble")
+    end)
+    at(0.6, function()
+      local ai = term().ai
+      ai.harnessNote = nil
+      ai.flowContinue = ai.continueTurn
+      ai.continueTurn = function(self)
+        self.flowFinished = true
+      end
+      local call = {
+        id = "flow_command",
+        name = "run_command",
+        args = { command = "sleep 2; printf 'FLOW_OUTPUT_OK\\n'" },
+      }
+      ai.messages = {
+        {
+          role = "assistant",
+          content = "Checking the terminal command flow.",
+          tool_calls = { call },
+        },
+      }
+      ai.toolQueue = { call }
+      ai:nextTool()
+      ai.scrollTarget = math.huge
+    end)
+    at(0.6, function()
+      local ai = term().ai
+      check(
+        "assist: command waits for approval",
+        ai.toolJob and ai.toolJob.job.needsApproval and not ai.toolJob.job.started
+      )
+      shot("assist_tool_review")
+    end)
+    at(0.4, function()
+      term().ai:approveTool()
+    end)
+    at(0.8, function()
+      local ai = term().ai
+      check(
+        "assist: command echo and silence do not complete the job",
+        ai.toolJob ~= nil and not ai.flowFinished
+      )
+    end)
+    at(3, function()
+      local ai = term().ai
+      check(
+        "assist: real command completion advances the loop",
+        ai.toolJob == nil and ai.flowFinished
+      )
+      local last = ai.messages[#ai.messages]
+      check(
+        "assist: command output returned",
+        last.role == "tool" and last.content:find("FLOW_OUTPUT_OK", 1, true)
+      )
+      ai.continueTurn = ai.flowContinue
+      ai.flowContinue = nil
+      shot("assist_tool_result")
+      ai.input.value = "Explain this output, then suggest the next step.\nKeep the answer short."
+    end)
+    at(0.5, function()
+      shot("assist_composer")
+    end)
+    at(0.4, function()
+      term().ai:startPractice(
+        "printf '%s\\n' 'A long practice line with 香港 and indentation that wraps cleanly without hiding the rest of the command'",
+        "sh"
+      )
+      setMode(800, 1100)
+    end)
+    at(2.5, function()
+      shot("assist_portrait")
+    end)
+    at(0.5, function()
+      term().ai:stopPractice()
+      Tools.remove("ports", App.core)
+      App.core.mcpStop()
+    end)
+    finish()
+    return
+  end
 
   if phase == "aichat" then
     local connected

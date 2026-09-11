@@ -8,6 +8,8 @@ use std::net::TcpListener;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
+
 use cbo_core::llm::{
     cancel, free, get, parse_sse_line, set_endpoint_override, start, Provider, SseEvent, StartArgs,
     ANTHROPIC_MAX_TOKENS, ANTHROPIC_VERSION, REFUSAL_NOTE,
@@ -23,7 +25,7 @@ fn collect(provider: Provider, stream: &str) -> (String, bool, Option<String>) {
             SseEvent::Text(t) => text.push_str(&t),
             SseEvent::Done => return (text, true, None),
             SseEvent::Error(e) => return (text, false, Some(e)),
-            SseEvent::Nothing => {}
+            SseEvent::Tools(_) | SseEvent::Nothing => {}
         }
     }
     (text, false, None)
@@ -228,6 +230,30 @@ fn start_local(provider: &str, url: &str) -> i32 {
         model: None,
         system: Some("be brief".into()),
         messages_json: "[{\"role\":\"user\",\"content\":\"hi\"}]".into(),
+        tools_json: None,
+    })
+    .expect("start")
+}
+
+/// Same, with a tool offered and a conversation that already carries a call
+/// and its result, so the request body exercises the whole conversion.
+fn start_local_tools(provider: &str, url: &str) -> i32 {
+    set_endpoint_override(Some(url));
+    start(StartArgs {
+        provider: provider.into(),
+        api_key: "test-key-123".into(),
+        model: None,
+        system: Some("be brief".into()),
+        messages_json: r#"[
+            {"role":"user","content":"what is on screen?"},
+            {"role":"assistant","content":"","tool_calls":[{"id":"c1","name":"read_screen","arguments":"{\"lines\":5}"}]},
+            {"role":"tool","tool_call_id":"c1","name":"read_screen","content":"$ ls\nCargo.toml"}
+        ]"#
+        .into(),
+        tools_json: Some(
+            r#"[{"name":"read_screen","description":"the screen","parameters":{"type":"object","properties":{"lines":{"type":"integer"}}}}]"#
+                .into(),
+        ),
     })
     .expect("start")
 }
@@ -438,4 +464,142 @@ fn ffi_state_of_unknown_request() {
     assert_eq!(from_c(cbo_core::cbo_llm_error(9999)), "bad request id");
     cbo_core::cbo_llm_cancel(9999);
     cbo_core::cbo_llm_free(9999);
+}
+
+// ------------------------------------------------------------ tool calling
+
+const OPENAI_TOOL_SSE: &str = concat!(
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"read_screen\",\"arguments\":\"\"}}]}}]}\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"li\"}}]}}]}\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"nes\\\":5}\"}}]}}]}\n",
+    "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n",
+    "data: [DONE]\n",
+);
+
+const ANTHROPIC_TOOL_SSE: &str = concat!(
+    "event: content_block_start\n",
+    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n",
+    "\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Checking.\"}}\n",
+    "\n",
+    "event: content_block_start\n",
+    "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_a\",\"name\":\"read_screen\",\"input\":{}}}\n",
+    "\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"lines\\\":\"}}\n",
+    "\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"5}\"}}\n",
+    "\n",
+    "event: message_stop\n",
+    "data: {\"type\":\"message_stop\"}\n",
+);
+
+/// OpenAI shape end to end: the request body carries the tool and the earlier
+/// call/result pair, and the streamed fragments assemble into one call.
+#[test]
+fn openai_tool_call_round_trip_over_http() {
+    let _g = HTTP.lock().unwrap_or_else(|e| e.into_inner());
+    let mut replay = replay(
+        "200 OK",
+        "",
+        vec![OPENAI_TOOL_SSE],
+        Duration::from_millis(0),
+    );
+    let id = start_local_tools("openai", &replay.url);
+    let (st, text, _) = drive(id, Duration::from_secs(10));
+    assert_eq!(st, LLM_DONE);
+    assert_eq!(text, "", "a pure tool turn streams no text");
+
+    let calls: Value = serde_json::from_str(&get(id).expect("req").calls_json()).expect("json");
+    let calls = calls.as_array().expect("array");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["id"], "call_a");
+    assert_eq!(calls[0]["name"], "read_screen");
+    assert_eq!(calls[0]["arguments"], "{\"lines\":5}");
+    free(id);
+
+    let request = replay.request();
+    let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or("{}"))
+        .expect("request body is JSON");
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["function"]["name"], "read_screen");
+    let msgs = body["messages"].as_array().expect("messages");
+    // system, user, assistant(tool_calls), tool
+    assert_eq!(msgs.len(), 4);
+    assert_eq!(msgs[2]["tool_calls"][0]["id"], "c1");
+    assert_eq!(
+        msgs[2]["tool_calls"][0]["function"]["arguments"],
+        "{\"lines\":5}"
+    );
+    assert_eq!(msgs[3]["role"], "tool");
+    assert_eq!(msgs[3]["tool_call_id"], "c1");
+    assert!(msgs[3]["content"]
+        .as_str()
+        .unwrap_or("")
+        .contains("Cargo.toml"));
+}
+
+/// Anthropic shape end to end: tools use `input_schema`, the call becomes a
+/// `tool_use` block and its result a `tool_result` inside a user message.
+#[test]
+fn anthropic_tool_call_round_trip_over_http() {
+    let _g = HTTP.lock().unwrap_or_else(|e| e.into_inner());
+    let mut replay = replay(
+        "200 OK",
+        "",
+        vec![ANTHROPIC_TOOL_SSE],
+        Duration::from_millis(0),
+    );
+    let id = start_local_tools("anthropic", &replay.url);
+    let (st, text, _) = drive(id, Duration::from_secs(10));
+    assert_eq!(st, LLM_DONE);
+    assert_eq!(text, "Checking.", "text and a call can arrive together");
+
+    let calls: Value = serde_json::from_str(&get(id).expect("req").calls_json()).expect("json");
+    assert_eq!(calls[0]["id"], "toolu_a");
+    assert_eq!(calls[0]["arguments"], "{\"lines\":5}");
+    free(id);
+
+    let request = replay.request();
+    let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap_or("{}"))
+        .expect("request body is JSON");
+    assert_eq!(body["tools"][0]["name"], "read_screen");
+    assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+    assert_eq!(body["system"], "be brief");
+    let msgs = body["messages"].as_array().expect("messages");
+    // user, assistant(tool_use), user(tool_result) - system is its own field
+    assert_eq!(msgs.len(), 3);
+    assert_eq!(msgs[1]["content"][0]["type"], "tool_use");
+    assert_eq!(msgs[1]["content"][0]["input"]["lines"], 5);
+    assert_eq!(msgs[2]["role"], "user");
+    assert_eq!(msgs[2]["content"][0]["type"], "tool_result");
+    assert_eq!(msgs[2]["content"][0]["tool_use_id"], "c1");
+}
+
+/// A malformed tool list is refused before anything is sent.
+#[test]
+fn bad_tools_json_is_rejected() {
+    let err = start(StartArgs {
+        provider: "openai".into(),
+        api_key: "k".into(),
+        model: None,
+        system: None,
+        messages_json: "[]".into(),
+        tools_json: Some("{not json".into()),
+    })
+    .expect_err("must refuse");
+    assert!(err.contains("tools_json"), "{}", err);
+
+    let err = start(StartArgs {
+        provider: "openai".into(),
+        api_key: "k".into(),
+        model: None,
+        system: None,
+        messages_json: "[]".into(),
+        tools_json: Some("{\"name\":\"x\"}".into()),
+    })
+    .expect_err("must refuse a non-array");
+    assert!(err.contains("array"), "{}", err);
 }

@@ -50,6 +50,47 @@ function App.init(opts)
   if opts.restoreSessions then
     Sessions.restore(App.termGrid())
   end
+  App.mcpPending = {}
+  App.mcpAutoStart()
+end
+
+-- AUTO START (AGI > MCP): bring the server up with the app when the user
+-- asked for it. Never under the mock core, which has no socket. Returns
+-- true when a server was actually started.
+function App.mcpAutoStart()
+  if not Config.get().mcpAuto or Core.mock then
+    return false
+  end
+  local ok, err = Core.mcpStart(Config.get().mcpPort or 0)
+  if not ok then
+    print("[mcp] could not start: " .. tostring(err))
+  end
+  return ok == true
+end
+
+-- MCP server on / off (AGI > MCP page). Returns ok, err.
+function App.setMcp(on)
+  if on then
+    local ok, err = Core.mcpStart(Config.get().mcpPort or 0)
+    if ok then
+      Core.mcpSetSession(App.sceneName == "terminal" and App.scene.id or -1)
+    end
+    return ok, err
+  end
+  Core.mcpStop()
+  return true
+end
+
+-- An inbox item from an MCP client goes to the terminal on screen; other
+-- scenes keep it until a terminal opens.
+function App.deliverMcp(item)
+  if App.sceneName == "terminal" and App.scene and App.scene.deliverMcp then
+    App.scene:deliverMcp(item)
+    return true
+  end
+  App.mcpPending[#App.mcpPending + 1] = item
+  App.toast("MCP: " .. (item.kind or "message") .. " waiting for a terminal")
+  return false
 end
 
 -- Fullscreen / window with an expo fade; every scene reflows through
@@ -360,6 +401,13 @@ function App.update(dt)
   Core.update(dt)
   Sessions.update(dt)
   App.updateIris(dt)
+  App.mcpPollAge = (App.mcpPollAge or 0) + dt
+  if App.mcpPollAge >= 0.25 then
+    App.mcpPollAge = 0
+    for _, item in ipairs(Core.mcpTake()) do
+      App.deliverMcp(item)
+    end
+  end
   App.filePollAge = (App.filePollAge or 0) + dt
   if App.filePollAge >= 0.2 then
     App.filePollAge = 0

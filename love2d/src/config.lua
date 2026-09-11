@@ -1,11 +1,15 @@
 -- Settings persisted to SQLite; legacy config.json is imported once.
 -- Explicit API keys are private local settings, excluded from input history.
+-- They are also written to <data dir>/apikeys.jsonl (one {provider, key} per
+-- line, mode 0600) through the core, and that file wins on load, so a key
+-- can be edited or removed with a text editor.
 
 local json = require("src.json")
 
 local C = {}
 
 C.FILE = "config.json"
+C.KEYS_FILE = "apikeys" -- <data dir>/apikeys.jsonl
 C.PROVIDERS = { "openai", "anthropic", "xai" }
 C.DEFAULT_MODELS = { openai = "gpt-5", anthropic = "claude-opus-5", xai = "grok-4.6" }
 C.ENV = {
@@ -35,6 +39,11 @@ local function defaults()
     display = "window", -- window | fullscreen
     orientation = "auto", -- auto | landscape | portrait
     orientationFor = "", -- window shape a forced orientation was chosen for
+    mcpAuto = false, -- start the MCP server with the app (MCP page / AGI)
+    mcpPort = 8765, -- 0 = any free port
+    aiTools = true, -- let the assist page call tools (function calling)
+    aiAutoRun = false, -- run_command types without asking (AGI > TOOLS)
+    aiTermFont = true, -- assist page body text at the terminal's glyph size
   }
 end
 
@@ -87,14 +96,52 @@ function C.load()
   if d.orientationFor ~= "portrait" and d.orientationFor ~= "landscape" then
     d.orientationFor = ""
   end
+  d.mcpPort = math.max(0, math.min(65535, math.floor(tonumber(d.mcpPort) or 8765)))
+  -- apikeys.jsonl wins over the SQLite copy: it is the file a user can edit
+  -- by hand. The mock keeps the same rows in memory, so this path is always
+  -- live and the assist page's key editing is testable without the dylib.
+  local rows = core and core.jsonlLoad(C.KEYS_FILE)
+  if rows then
+    d.apiKeys = { openai = "", anthropic = "", xai = "" }
+  end
+  for _, row in ipairs(rows or {}) do
+    if C.DEFAULT_MODELS[row.provider] and type(row.key) == "string" then
+      d.apiKeys[row.provider] = row.key
+    end
+  end
   if persistent and imported then
     C.save()
   end
   return C.data
 end
 
+-- The apikeys.jsonl rows for the current keys (empty keys are kept so a
+-- removed key overrides an older SQLite value on load).
+function C.keyRows()
+  local rows = {}
+  for _, provider in ipairs(C.PROVIDERS) do
+    rows[#rows + 1] = { provider = provider, key = C.data.apiKeys[provider] or "" }
+  end
+  return rows
+end
+
+-- Store one key: settings, SQLite and apikeys.jsonl together.
+function C.setApiKey(provider, key)
+  if not C.DEFAULT_MODELS[provider] then
+    return false
+  end
+  C.data.apiKeys[provider] = (key or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  return C.save()
+end
+
 function C.save()
   local core = package.loaded["src.core"]
+  if core then
+    local keysSaved, err = core.jsonlSave(C.KEYS_FILE, C.keyRows())
+    if not keysSaved then
+      print("[config] apikeys.jsonl save failed: " .. tostring(err))
+    end
+  end
   if core and core.lib and not core.mock then
     local saved = core.kvSet("ui.config", json.encode(C.data))
     for _, provider in ipairs(C.PROVIDERS) do

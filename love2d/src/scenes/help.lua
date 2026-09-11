@@ -17,6 +17,17 @@ local ROWS = {
   { "Right / Ctrl+Space", "Accept the ghost completion (Right: terminal only)" },
   { "Ctrl+Shift+Space", "AI sidekick panel" },
   { "Shift+Tab in the AI panel", "chat <-> notes (saved locally, searchable, fed to the chat)" },
+  { "Ctrl+Shift+Space", "keyboard: chat input <-> terminal while the panel is open" },
+  { "RUN / PRACTICE on a code block", "review + paste it, or practice locally without executing" },
+  {
+    "Ctrl+G / SETUP in the panel",
+    "tools the AI can call (add, edit, remove; live), API keys, playground, MCP",
+  },
+  {
+    "MCP tab in AI SETUP",
+    "URL for Claude Code: it reads the screen and answers in the assist page",
+  },
+  { "Ctrl+Y in the AI panel", "run the command a tool asked for (RUN / SKIP buttons)" },
   { "AUTO NOTE (terminal bar)", "screen -> AI summary -> note (raw capture without a key)" },
   {
     "HOT NOTE / NEW NOTE (terminal bar)",

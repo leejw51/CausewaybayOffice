@@ -16,6 +16,7 @@ pub mod graphics;
 pub mod input_history;
 pub mod learning;
 pub mod llm;
+pub mod mcp;
 pub mod names;
 pub mod notes;
 pub mod patterns;
@@ -23,6 +24,7 @@ pub mod record;
 pub mod search;
 pub mod session;
 pub mod ssh;
+pub mod store;
 pub mod term;
 
 use std::cell::RefCell;
@@ -106,6 +108,7 @@ pub extern "C" fn cbo_init() {
 pub extern "C" fn cbo_shutdown() {
     guard((), || {
         embed::set_paused(true);
+        mcp::stop();
         for sess in session::live() {
             sess.close_requested.store(true, Ordering::SeqCst);
             sess.epoch.fetch_add(1, Ordering::SeqCst);
@@ -597,6 +600,7 @@ pub unsafe extern "C" fn cbo_llm_start(
             model: cstr(model).map(str::to_string),
             system: cstr(system).map(str::to_string),
             messages_json: messages_json.to_string(),
+            tools_json: None,
         };
         match llm::start(args) {
             Ok(id) => id,
@@ -605,6 +609,55 @@ pub unsafe extern "C" fn cbo_llm_start(
                 -1
             }
         }
+    })
+}
+
+/// # Safety
+/// every pointer must be NULL or a valid NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn cbo_llm_start_tools(
+    provider: *const c_char,
+    api_key: *const c_char,
+    model: *const c_char,
+    system: *const c_char,
+    messages_json: *const c_char,
+    tools_json: *const c_char,
+) -> i32 {
+    guard(-1, || {
+        clear_last_error();
+        let Some(provider) = cstr(provider) else {
+            set_last_error("provider is required");
+            return -1;
+        };
+        let Some(messages_json) = cstr(messages_json) else {
+            set_last_error("messages_json is required");
+            return -1;
+        };
+        let args = llm::StartArgs {
+            provider: provider.to_string(),
+            api_key: cstr(api_key).unwrap_or("").to_string(),
+            model: cstr(model).map(str::to_string),
+            system: cstr(system).map(str::to_string),
+            messages_json: messages_json.to_string(),
+            tools_json: cstr(tools_json)
+                .filter(|t| !t.trim().is_empty())
+                .map(str::to_string),
+        };
+        match llm::start(args) {
+            Ok(id) => id,
+            Err(e) => {
+                set_last_error(e);
+                -1
+            }
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cbo_llm_take_calls(req: i32) -> *const c_char {
+    guard(std::ptr::null(), || match llm::get(req) {
+        Some(r) => ret_str(&r.calls_json()),
+        None => ret_str("[]"),
     })
 }
 
@@ -785,6 +838,80 @@ pub unsafe extern "C" fn cbo_display_save(fullscreen: i32, orientation: *const c
             }
         }
     })
+}
+
+/// # Safety
+/// `name` and `json` must be valid NUL-terminated strings.
+#[no_mangle]
+pub unsafe extern "C" fn cbo_jsonl_save(name: *const c_char, json: *const c_char) -> i32 {
+    guard(-1, || {
+        let Some(name) = cstr(name) else {
+            set_last_error("store name is required");
+            return -1;
+        };
+        match db::init().and_then(|db| store::save(&db.dir, name, cstr(json).unwrap_or(""))) {
+            Ok(()) => 0,
+            Err(e) => {
+                set_last_error(e);
+                -1
+            }
+        }
+    })
+}
+
+/// # Safety
+/// `name` must be a valid NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn cbo_jsonl_load(name: *const c_char) -> *const c_char {
+    guard(std::ptr::null(), || {
+        let Some(name) = cstr(name) else {
+            set_last_error("store name is required");
+            return ret_str("");
+        };
+        match db::init().and_then(|db| store::load(&db.dir, name)) {
+            Ok(data) => ret_str(&data.unwrap_or_default()),
+            Err(e) => {
+                set_last_error(e);
+                ret_str("")
+            }
+        }
+    })
+}
+
+// ---- mcp -------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn cbo_mcp_start(port: u16) -> i32 {
+    guard(-1, || match mcp::start(port) {
+        Ok(_) => {
+            clear_last_error();
+            0
+        }
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn cbo_mcp_stop() {
+    guard((), mcp::stop);
+}
+
+#[no_mangle]
+pub extern "C" fn cbo_mcp_info() -> *const c_char {
+    guard(std::ptr::null(), || ret_str(&mcp::info().to_string()))
+}
+
+#[no_mangle]
+pub extern "C" fn cbo_mcp_take() -> *const c_char {
+    guard(std::ptr::null(), || ret_str(&mcp::take_inbox()))
+}
+
+#[no_mangle]
+pub extern "C" fn cbo_mcp_set_session(id: i32) {
+    guard((), || mcp::set_session(id));
 }
 
 /// # Safety

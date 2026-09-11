@@ -52,7 +52,7 @@ pub fn save_named(dir: &Path, name: &str, text: &str) -> Result<(), String> {
     file.sync_all().map_err(|e| e.to_string())?;
     std::fs::rename(&temp, dir.join(format!("{name}.jsonl"))).map_err(|e| e.to_string())
 }
-fn private_file(path: &Path, truncate: bool) -> Result<std::fs::File, String> {
+pub(crate) fn private_file(path: &Path, truncate: bool) -> Result<std::fs::File, String> {
     let mut options = std::fs::OpenOptions::new();
     options.create(true).write(true).truncate(truncate);
     #[cfg(unix)]

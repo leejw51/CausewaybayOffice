@@ -296,3 +296,128 @@ its columns and scrolls. Dialogs size their content to their actual frame.
   uploads without `overwrite`; a taken name steps n and retries up to
   twenty times, so an existing file is never replaced. The note buttons have
   no width threshold: the tab strip wraps rows instead.
+
+## AI tools, the AGI page and MCP (2026-09-11)
+
+* **Function calling.** `cbo_llm_start_tools` takes a neutral tool list
+  `[{name, description, parameters}]` and a message log that may carry
+  assistant `tool_calls` and `{"role":"tool", tool_call_id, content}` results.
+  Rust converts both to the provider's shape (OpenAI/xAI `tools` +
+  `tool_calls`; Anthropic `input_schema`, `tool_use` and `tool_result` blocks,
+  with consecutive results merged into one user message) and assembles the
+  streamed fragments; `cbo_llm_take_calls` returns `[{id, name, arguments}]`
+  once the stream is DONE. The core never executes anything.
+* **Registry** (`love2d/src/tools.lua`). Eight built-ins: `read_screen`,
+  `run_command`, `write_file`, `search_notes`, `save_note`, `define_tool`, `remove_tool`,
+  `list_tools`. A user tool is a shell template with `{param}` placeholders,
+  expanded with single-quote shell quoting. Rows live in
+  `<data dir>/tools.jsonl`. Every change is saved at once and each request is
+  built from the live registry, so `define_tool` (the model) and the AGI page
+  (the user) both take effect without a relaunch; a `tools.jsonl` edited by
+  hand is re-read the next time the AGI page opens.
+* **Approval.** `run_command` and every user tool type into the terminal
+  through the scene's own write, then wait for an explicit per-job completion
+  marker from the shell. The command runs with `eval` to retain shell state;
+  split `printf` markers avoid matching the command's echo and separate
+  fresh output from older terminal text. Silence never
+  completes a command, and after 30 seconds the panel says it is still running.
+  STOP cancels the loop and sends Ctrl+C to that job's original session. The panel
+  shows ALLOW / SKIP (Ctrl+Y approves) for unrestricted shell access, including
+  when `cfg.aiAutoRun` is on. The loop runs
+  at most `AI.MAX_TOOL_ROUNDS` rounds per question.
+* **AGI page** (`scenes/agi.lua`), from the panel header, the context menu or
+  Ctrl+G (labelled SETUP in the assistant). TOOLS lists the harness with ADD / EDIT / DEL / ON-OFF and the
+  AUTO RUN and TOOLS switches. KEYS sets, changes and removes an API key per
+  provider (masked; an environment key is labelled and cannot be "removed")
+  and its model. PLAYGROUND sends a prompt, PING or a TOOLS TEST and reports
+  provider, latency, the stream and any function call. MCP starts/stops the
+  server and shows the URL and the `claude mcp add` line.
+* **API keys** are written to `<data dir>/apikeys.jsonl` (one
+  `{provider, key}` per line, mode 0600) as well as SQLite, and that file
+  wins on load, so a key can be edited or deleted with a text editor.
+* **MCP server** (`rust/src/mcp.rs`): JSON-RPC 2.0 over
+  `POST http://127.0.0.1:<port>/mcp/<token>`, loopback only, token generated
+  with 256 bits of OS randomness into kv `mcp.token`. Legacy 16-character tokens
+  are replaced on startup, so existing clients must copy the new connection URL.
+  Entropy failure prevents startup. Host must match the loopback endpoint; a
+  supplied Origin must match its HTTP origin (native clients may omit Origin).
+  Requests have a 16 KiB total header limit, at most 64 headers, a 4 MiB body
+  limit, and a 15-second absolute read deadline. Authentication occurs before
+  body allocation. At most 16 connections run concurrently; STOP interrupts
+  pending readers. Privacy mode masks tokens in both displayed connection
+  strings, while explicit copy actions retain the actual credential. QA logs
+  redact tokens regardless of Privacy mode.
+  `office_screen`, `office_cwd`, `office_sessions`,
+  `office_notes_search` and `office_note_add` are answered in Rust;
+  `office_send`, `office_practice` and `office_type` queue an inbox item that
+  `love.update` drains and delivers to the terminal's assist page. Terminal
+  input from a client always goes through the review sheet. The point is
+  cost: Claude Code already runs on the user's plan, so it can read the
+  screen and answer in the page without spending the office's own API credit.
+* **Coding practice.** A fenced code block in an answer gets COPY, RUN
+  (review sheet) and PRACTICE. Practice uses a local input field: Enter checks
+  the line and never writes to SSH. Targets wrap without losing spaces or
+  Unicode; long targets scroll under the pointer and READ opens the full code.
+  The matched prefix is green and a mismatch shows a correction hint. Completion
+  returns to the preserved chat draft; RUN remains an optional reviewed action.
+  Esc/STOP exits practice. Clicking the composer or terminal selects keyboard
+  focus; Ctrl+Shift+Space and the TERM/CHAT button switch it too.
+* **Simple assistant UI.** NOTES, SETUP and terminal/chat focus stay in the
+  header, with CLEAR when there is history. The composer wraps up to four rows
+  at the terminal font size, shows a placeholder, and changes SEND to STOP while
+  working. EXPLAIN/FIX start common tasks. SETUP groups tools, keys, playground
+  and MCP. Provider headings say API; MCP explains that questions are asked in
+  the external client and chat SEND continues to use the selected API.
+* **Turn lifecycle.** Every request rebuilds the enabled tools. Cancellation
+  drops the stream immediately so late calls cannot run; tool cancellation
+  records results for the conversation. MCP items wait for an active tool turn
+  to finish so they cannot split call/result pairs. A new question may run at
+  most six tool rounds, then receives a final request without tools.
+* **Assist body text** is drawn in screen space at the terminal's glyph size
+  (`cfg.aiTermFont`, default on), so chat, code and practice lines match the
+  grid exactly instead of being a fractionally resampled 16 px face.
+
+
+## Coding agent through the terminal (2026-09-11)
+
+Open AI Assist, select a provider, and ask for a program (for example, "write
+rust code for helloworld"). The agent inspects the folder and compiler, writes
+source with `write_file`, compiles/runs with `run_command`, and uses diagnostics
+to repair failures. Code requests are actions; explanation-only requests remain
+text. CODE enables automatic in-workspace file writes. RUN approves an ordinary
+file write; ALLOW approves one operation with access beyond the workspace.
+
+`write_file(path, content, overwrite=false)` sends source bytes through the
+connected terminal as bounded encoded chunks. Confined writes use a fixed
+`python3 -I` helper that opens descendant directories by descriptor with
+`O_NOFOLLOW`; symlink directories cannot redirect writes outside the workspace.
+Python/dir-fd support is required and failures never fall back to an unrestricted
+write. An explicitly approved outside write uses the shell transport. Parent directories
+are created, temporary files are private, and the destination is published only
+after all chunks succeed. Existing files are protected by default; overwrite
+must be explicitly requested by the tool call. The approval bubble shows the
+path and source, not the encoded transport. Maximum source size is 64 KiB.
+Cancellation or a failed write may leave the named temporary file for inspection.
+
+The workspace is the shell folder at SEND time, fixed through the tool loop.
+Lexical traversal and sibling prefixes cannot gain automatic outside access.
+Outside file writes and every arbitrary shell/custom command require per-operation
+approval, even with CODE or AUTO RUN enabled. A shell command or generated program
+has unrestricted SSH-user access; the application does not pretend that `cd` or
+prompt instructions sandbox it. Access approval is limited to that operation and
+does not expand the workspace. Trusted runtime files needed by the fixed writer
+are not agent-directed workspace reads.
+
+The main action is ALLOW/RUN while waiting, STOP while executing, and SEND when
+idle. A pinned activity line reports planning, tool summaries, file-write steps,
+result processing, and completion; the workspace is shown below it. New tool
+steps scroll into view, while manual scrolling lets users read earlier output.
+
+Command completion markers now include success/failure, so a compile error is
+returned as a failed tool result. Source text is never mistaken for shell input.
+`make test-codeagent` is an opt-in live Grok + localhost SSH test: it sends the
+exact example prompt with no canned source/tool calls, verifies source on disk
+and successful compiler/program output, and saves `codeagent_report.json` and
+screenshots in the LÖVE QA save directory. It uses a fresh project folder and
+requires deliberate approvals. `--shots=codeagentgo` tests the Go producer/consumer
+request using the same harness.

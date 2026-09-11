@@ -41,3 +41,4 @@ qa*.log
 .idea/
 # test pictures dropped in the repo root for the kitty image tool
 /*.png
+*.txt

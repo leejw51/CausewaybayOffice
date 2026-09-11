@@ -179,6 +179,11 @@ test-live: require-cargo
 	cd $(RUST) && CBO_LIVE=1 $(CARGO) test --release --test llm_live
 	cd $(RUST) && CBO_LIVE=1 $(CARGO) test --release --test db semantic_and_hybrid_search_with_openai
 
+# Explicit live coding-agent flow; uses the configured Grok key and localhost SSH.
+.PHONY: test-codeagent
+test-codeagent: core require-love
+	"$(LOVE)" $(GAME) --shots=codeagent
+
 # LuaJIT loads the dylib through the same cdef the app uses.
 test-ffi: core require-luajit
 	$(LUAJIT) $(RUST)/examples/ffi_smoke.lua

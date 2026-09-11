@@ -21,7 +21,14 @@ local function encodeString(s)
     .. '"'
 end
 
+-- An empty table encodes as []. Mark a table with J.object() when it must
+-- stay a JSON object (a JSON-schema "properties": {} for a tool).
+local OBJECT = { __jsontype = "object" }
+
 local function isArray(t)
+  if getmetatable(t) == OBJECT then
+    return false
+  end
   local n = 0
   for k in pairs(t) do
     if type(k) ~= "number" or k < 1 or math.floor(k) ~= k then
@@ -244,6 +251,10 @@ function J.decode(s)
     return v
   end
   return nil, v
+end
+
+function J.object(t)
+  return setmetatable(t or {}, OBJECT)
 end
 
 return J

@@ -343,21 +343,51 @@ end
 
 -- LLM ------------------------------------------------------------------------
 
+-- p.tools: neutral tool list [{name, description, parameters}] (function
+-- calling); the core converts it to the provider's shape.
 function Core.llmStart(p)
   local json = require("src.json")
-  local req = tonumber(
-    lib.cbo_llm_start(
-      p.provider or "openai",
-      p.apiKey or "",
-      cstr(p.model),
-      p.system or "",
-      p.messagesJson or json.encode(p.messages or {})
+  local messages = p.messagesJson or json.encode(p.messages or {})
+  local req
+  if p.tools and #p.tools > 0 then
+    req = tonumber(
+      lib.cbo_llm_start_tools(
+        p.provider or "openai",
+        p.apiKey or "",
+        cstr(p.model),
+        p.system or "",
+        messages,
+        json.encode(p.tools)
+      )
     )
-  )
+  else
+    req = tonumber(
+      lib.cbo_llm_start(
+        p.provider or "openai",
+        p.apiKey or "",
+        cstr(p.model),
+        p.system or "",
+        messages
+      )
+    )
+  end
   if req < 0 then
     return nil, Core.lastError()
   end
   return req
+end
+
+-- Function calls the model made (meaningful once the request is DONE):
+-- [{id, name, arguments (JSON text), args (decoded table)}].
+function Core.llmTakeCalls(req)
+  local json = require("src.json")
+  local calls = json.decode(str(lib.cbo_llm_take_calls(req))) or {}
+  for _, c in ipairs(calls) do
+    c.arguments = c.arguments or "{}"
+    local args = json.decode(c.arguments)
+    c.args = type(args) == "table" and args or {}
+  end
+  return calls
 end
 
 function Core.llmState(req)
@@ -446,6 +476,10 @@ function Core.shutdown()
   if not Core.mock then
     lib.cbo_shutdown()
   end
+end
+
+function Core.dataDir()
+  return not Core.mock and str(lib.cbo_data_dir()) or "(mock: in memory)"
 end
 
 local function decoded(value, fallback)
@@ -622,6 +656,96 @@ end
 
 function Core.canComplete(id)
   return not Core.mock and lib.cbo_session_can_complete(id) ~= 0
+end
+
+-- Private JSONL stores (<data dir>/<name>.jsonl): API keys, the AI tool
+-- registry. The mock keeps them in memory so the UI and tests work without
+-- the dylib. rows: array of tables. Load returns rows or nil when absent.
+local mockStores = {}
+
+function Core.jsonlSave(name, rows)
+  if Core.mock then
+    mockStores[name] = require("src.json").decode(require("src.json").encode(rows or {})) or {}
+    return true
+  end
+  local ok = lib.cbo_jsonl_save(name, require("src.json").encode({ rows = rows or {} })) == 0
+  return ok, not ok and Core.lastError() or nil
+end
+
+function Core.jsonlLoad(name)
+  if Core.mock then
+    return mockStores[name]
+  end
+  local raw = str(lib.cbo_jsonl_load(name))
+  if raw == "" then
+    return nil
+  end
+  local t = require("src.json").decode(raw)
+  return t and t.rows or nil
+end
+
+-- MCP server (Claude Code and other clients connect to the office). The mock
+-- fakes a running server; Core.mockMcpPush feeds its inbox for tests.
+local mockMcp = { running = false, url = "", port = 0, requests = 0, inbox = {}, session = -1 }
+
+function Core.mcpStart(port)
+  if Core.mock then
+    mockMcp.running = true
+    mockMcp.port = port and port > 0 and port or 8765
+    mockMcp.url = "http://127.0.0.1:" .. mockMcp.port .. "/mcp/mocktoken"
+    return true
+  end
+  local ok = lib.cbo_mcp_start(port or 0) == 0
+  return ok, not ok and Core.lastError() or nil
+end
+
+function Core.mcpStop()
+  if Core.mock then
+    mockMcp.running, mockMcp.url = false, ""
+    return
+  end
+  lib.cbo_mcp_stop()
+end
+
+function Core.mcpInfo()
+  if Core.mock then
+    return {
+      running = mockMcp.running,
+      url = mockMcp.url,
+      port = mockMcp.port,
+      requests = mockMcp.requests,
+      inbox = #mockMcp.inbox,
+      session = mockMcp.session,
+      last_request_ms = 0,
+      last_client = "",
+    }
+  end
+  return decoded(lib.cbo_mcp_info(), { running = false, url = "" })
+end
+
+-- Inbox items since the last call: [{id, ts_ms, kind, text, title?}].
+function Core.mcpTake()
+  if Core.mock then
+    local items = mockMcp.inbox
+    mockMcp.inbox = {}
+    return items
+  end
+  return decoded(lib.cbo_mcp_take(), {})
+end
+
+function Core.mcpSetSession(id)
+  if Core.mock then
+    mockMcp.session = id or -1
+    return
+  end
+  lib.cbo_mcp_set_session(id or -1)
+end
+
+-- Test helper (mock only): what an MCP client would have sent.
+function Core.mockMcpPush(kind, text, title)
+  mockMcp.requests = mockMcp.requests + 1
+  mockMcp.inbox[#mockMcp.inbox + 1] =
+    { id = mockMcp.requests, ts_ms = Core.nowMs(), kind = kind, text = text, title = title }
 end
 
 return Core

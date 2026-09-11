@@ -34,6 +34,28 @@ make test     # cargo test + the in-engine suite
 `make help` lists everything. `make start-mock` launches without the core, for
 UI work.
 
+## Code with AI Assist
+
+Connect to a terminal, open **AI Assist**, and choose **SETUP > KEYS** to set
+your Grok API key (or use `GROK_API_KEY` / `XAI_API_KEY`). Select Grok and type:
+
+> write rust code for helloworld
+
+The agent checks the folder and compiler, writes the source, then compiles and
+runs it in your connected SSH terminal. **CODE** enables automatic file writes
+inside the folder where the task starts and its subfolders. The current step
+and workspace stay visible above the input. **STOP** interrupts the operation.
+
+Outside file access requires **ALLOW** for that operation. Shell commands also
+require **ALLOW** because an unrestricted SSH shell can access files outside
+the workspace, including when compiling or running generated code. **CODE** and
+**AUTO RUN** never bypass these reviews. Confined writes require `python3` on
+the SSH host and reject symlink directories. Existing files are preserved unless
+an edit is requested.
+
+`make test-codeagent` runs this exact prompt against live Grok and localhost SSH,
+and verifies the source and Hello World output. See [testing](docs/TESTING.md).
+
 ## Keys
 
 | Key | Action |

@@ -143,6 +143,16 @@ const char* cbo_llm_take_delta(int32_t req);
 const char* cbo_llm_error(int32_t req);
 void        cbo_llm_cancel(int32_t req);
 void        cbo_llm_free(int32_t req);
+/* Function calling. tools_json: [{name, description, parameters (JSON schema)}] or NULL.
+   messages_json may carry assistant messages with tool_calls [{id, name, arguments}] and
+   {"role":"tool","tool_call_id","name","content"} results; the core converts them to the
+   provider's shape. When the stream is DONE, cbo_llm_take_calls returns the calls the
+   model made as JSON [{id, name, arguments}] ("[]" when none); the UI runs them, appends
+   the results and starts the next request. */
+int32_t     cbo_llm_start_tools(const char* provider, const char* api_key, const char* model,
+                                const char* system, const char* messages_json,
+                                const char* tools_json);
+const char* cbo_llm_take_calls(int32_t req);
 
 /* ---- utils ---- */
 int32_t     cbo_utf8_width(const char* s);   /* display columns of a UTF-8 string */
@@ -165,6 +175,27 @@ const char* cbo_sessions_load(void);
 
 /* Append display preferences to $CBO_HOME/display.jsonl (default ~/.causewaybayoffice). */
 int32_t     cbo_display_save(int32_t fullscreen, const char* orientation);
+
+/* Private JSONL records: $CBO_HOME/<name>.jsonl, one object per line, mode 0600.
+   name: [a-z][a-z0-9_]{0,31}, not favorites/sessions/display. json: {"rows":[{...}]}.
+   Used for "apikeys" ({provider, key}) and "tools" (the AI function-call registry).
+   Load returns the same shape, "" when the file does not exist. */
+int32_t     cbo_jsonl_save(const char* name, const char* json);
+const char* cbo_jsonl_load(const char* name);
+
+/* ---- mcp: Model Context Protocol server for Claude Code and other clients ----
+   JSON-RPC 2.0 over POST http://127.0.0.1:<port>/mcp/<token> (loopback only; the
+   256-bit OS-random token is kept in kv "mcp.token"; legacy tokens are rotated).
+   port 0 = any free port. Host/Origin checks and request/connection limits apply.
+   Tools: office_send / office_practice / office_type (land in the inbox for the
+   UI), office_screen / office_cwd / office_sessions (answered from the core),
+   office_notes_search / office_note_add. The UI drains the inbox every frame:
+   JSON [{id, ts_ms, kind: send|practice|type, text, title?}]. */
+int32_t     cbo_mcp_start(uint16_t port);           /* 0 ok / -1 + last_error; no-op when running */
+void        cbo_mcp_stop(void);
+const char* cbo_mcp_info(void);                     /* JSON {running, url, port, requests, last_request_ms, last_client, inbox, session} */
+const char* cbo_mcp_take(void);                     /* inbox since the last call, "[]" when empty */
+void        cbo_mcp_set_session(int32_t id);        /* the terminal on screen (default for office_screen) */
 
 /* Local non-secret field drafts/history; search returns a JSON string array. */
 int32_t     cbo_input_save(const char* field, const char* value, int32_t commit);

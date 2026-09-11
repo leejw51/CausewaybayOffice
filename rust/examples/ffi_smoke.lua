@@ -144,5 +144,66 @@ assert(s(lib.cbo_complete(0, "", 3)):sub(1, 1) == "[", "complete empty prefix")
 assert(s(lib.cbo_predict_next(0, 5)):sub(1, 1) == "[", "predict json")
 print("persistence/search/patterns/typing ABI OK")
 
+-- JSONL stores (0.4 ABI): api keys and the AI tool registry live here.
+assert(s(lib.cbo_jsonl_load("apikeys")) == "", "an absent store loads empty")
+assert(lib.cbo_jsonl_save("apikeys", '{"rows":[{"provider":"openai","key":"sk-銅鑼灣"}]}') == 0,
+  "jsonl save: " .. s(lib.cbo_last_error()))
+local keys = s(lib.cbo_jsonl_load("apikeys"))
+assert(keys:find("sk-銅鑼灣", 1, true), "jsonl roundtrip keeps utf8: " .. keys)
+assert(lib.cbo_jsonl_save("tools", '{"rows":[{"name":"disk","command":"df -h {p}"}]}') == 0)
+assert(s(lib.cbo_jsonl_load("tools")):find('"df -h {p}"', 1, true), "tool store roundtrip")
+assert(lib.cbo_jsonl_save("favorites", '{"rows":[]}') == -1, "a snapshot name is refused")
+assert(lib.cbo_jsonl_save("../escape", '{"rows":[]}') == -1, "a path is refused")
+assert(lib.cbo_jsonl_save("apikeys", "{nope") == -1, "malformed json is refused")
+assert(s(lib.cbo_jsonl_load("apikeys")):find("sk-銅鑼灣", 1, true), "a failed save keeps the file")
+-- the key file must not be world readable
+local mode = io.popen("stat -f '%Lp' '" .. s(lib.cbo_data_dir()) .. "/apikeys.jsonl' 2>/dev/null")
+if mode then
+  local perms = (mode:read("*a") or ""):gsub("%s", "")
+  mode:close()
+  assert(perms == "" or perms == "600", "apikeys.jsonl must be private, got " .. perms)
+end
+print("jsonl store ABI OK (mode " .. tostring(s(lib.cbo_data_dir())) .. "/apikeys.jsonl)")
+
+-- MCP server (0.4 ABI): start on a free port, speak JSON-RPC, drain the inbox.
+assert(s(lib.cbo_mcp_info()):find('"running":false'), "mcp starts stopped")
+assert(s(lib.cbo_mcp_take()) == "[]", "empty inbox")
+assert(lib.cbo_mcp_start(0) == 0, "mcp start: " .. s(lib.cbo_last_error()))
+local running = s(lib.cbo_mcp_info())
+assert(running:find('"running":true'), running)
+local url = running:match('"url":"([^"]+)"')
+assert(url and url:find("^http://127%.0%.0%.1:%d+/mcp/%w+$"), "loopback url with a token: " .. tostring(url))
+assert(lib.cbo_mcp_start(0) == 0, "starting twice is a no-op")
+-- a real request over the socket, with curl (present on macOS and CI images)
+local function post(body)
+  local cmd = string.format(
+    "curl -sS --max-time 5 -X POST -H 'Content-Type: application/json' -d %q %q 2>/dev/null",
+    body, url)
+  local pipe = io.popen(cmd)
+  local out = pipe and pipe:read("*a") or ""
+  if pipe then pipe:close() end
+  return out
+end
+local init = post('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+if init == "" then
+  print("  (curl unavailable: skipped the MCP HTTP round trip)")
+else
+  assert(init:find('"serverInfo"') and init:find("causewaybay%-office"), "initialize: " .. init)
+  local list = post('{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
+  assert(list:find('"office_screen"') and list:find('"office_send"'), "tools/list: " .. list)
+  local call = post('{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"office_send","arguments":{"text":"from the smoke test"}}}')
+  assert(call:find("delivered", 1, true), "tools/call: " .. call)
+  local inbox = s(lib.cbo_mcp_take())
+  assert(inbox:find("from the smoke test", 1, true), "inbox: " .. inbox)
+  assert(s(lib.cbo_mcp_take()) == "[]", "the inbox drains once")
+  local bad = post('{"jsonrpc":"2.0","id":4,"method":"nope"}')
+  assert(bad:find("%-32601"), "unknown method: " .. bad)
+end
+lib.cbo_mcp_set_session(7)
+assert(s(lib.cbo_mcp_info()):find('"session":7'), "the terminal on screen is recorded")
+lib.cbo_mcp_stop()
+assert(s(lib.cbo_mcp_info()):find('"running":false'), "mcp stops")
+print("mcp ABI OK")
+
 lib.cbo_shutdown()
 print("FFI SMOKE PASS")

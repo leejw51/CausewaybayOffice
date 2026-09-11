@@ -81,6 +81,8 @@ end
 
 function Term:enter()
   self:layout()
+  self.app.core.mcpSetSession(self.id)
+  self:drainMcp()
   local cfg = self.app.cfg.get()
   if not cfg.seenTermHint then
     cfg.seenTermHint = true
@@ -222,6 +224,40 @@ function Term:newNote()
   return true
 end
 
+-- AGI page: tools (harness), API keys, playground, MCP. Reached from the AI
+-- panel header (AGI / KEY / MCP), the context menu or Ctrl+G; the tab strip
+-- has no button for it because it must keep room for the session name.
+-- The AI panel opens with it so what the page produces is visible.
+function Term:openAgi(tab)
+  if self.app.hasOverlay("agi") then
+    return
+  end
+  if not self.aiOpen then
+    self:toggleAI()
+  elseif not self.ai then
+    self.ai = AIPanel.new(self.app, self.id)
+  end
+  self.ai:openAgi(tab)
+end
+
+-- An MCP inbox item for this terminal's assist page (opens the panel).
+function Term:deliverMcp(item)
+  if not self.aiOpen then
+    self:toggleAI()
+  elseif not self.ai then
+    self.ai = AIPanel.new(self.app, self.id)
+  end
+  self.ai:mcpDeliver(item)
+end
+
+function Term:drainMcp()
+  local pending = self.app.mcpPending or {}
+  self.app.mcpPending = {}
+  for _, item in ipairs(pending) do
+    self:deliverMcp(item)
+  end
+end
+
 -- Open the editor on a remote file named in the terminal (relative to the
 -- shell folder when not absolute).
 function Term:hotNote(name)
@@ -308,6 +344,18 @@ function Term:openMenu(mx, my)
         "Auto note (screen -> AI -> note)",
         function()
           self:autoNote()
+        end,
+      },
+      {
+        "AGI: tools, API keys, playground",
+        function()
+          self:openAgi("tools")
+        end,
+      },
+      {
+        "MCP: connect Claude Code to this office",
+        function()
+          self:openAgi("mcp")
         end,
       },
       {
@@ -547,12 +595,15 @@ function Term:cycle(dir)
   app.fx.tween(self.prev, { x = -dir * D.vw }, 0.32, "expoOut", function()
     self.prev = nil
   end)
+  if self.ai then
+    self.ai:close()
+  end
   self.id = rec.id
+  app.core.mcpSetSession(self.id)
   self.slide.x = dir * D.vw
   app.fx.tween(self.slide, { x = 0 }, 0.32, "expoOut")
   app.audio.play("select")
   if self.ai then
-    self.ai:close()
     self.ai = AIPanel.new(app, self.id)
   end
   self:layout()
@@ -767,11 +818,22 @@ function Term:keypressed(key, m)
   end
   local app = self.app
   local chord = Keys.appChord(key, m)
-  -- Chat owns clipboard input. Never route a chat paste/copy to the SSH shell.
-  if self.aiOpen and self.ai and chord == "paste" then
-    self.ai.input:keypressed("v", m)
+  if chord == "aiFocus" then
+    if self.aiOpen and self.ai then
+      self.ai:toggleFocus()
+    else
+      self:toggleAI()
+    end
     return
-  elseif self.aiOpen and self.ai and chord == "copy" then
+  end
+  -- Keys go to the shell while the panel's focus is on the terminal
+  -- (TERM button or clicking the terminal): the chat only sees its own chords.
+  local chatFocus = self.aiOpen and self.ai and not self.ai.focusTerm
+  -- Chat owns clipboard input. Never route a chat paste/copy to the SSH shell.
+  if chatFocus and chord == "paste" then
+    self.ai:keypressed("v", m)
+    return
+  elseif chatFocus and chord == "copy" then
     if self.ai.input.selectAll then
       love.system.setClipboardText(self.ai.input.value)
     end
@@ -793,6 +855,8 @@ function Term:keypressed(key, m)
     return app.push("search")
   elseif chord == "rename" then
     return app.push("rename", { id = self.id })
+  elseif chord == "agi" then
+    return self:openAgi("tools")
   elseif chord == "settings" then
     return app.push("settings")
   elseif chord == "help" then
@@ -827,8 +891,8 @@ function Term:keypressed(key, m)
     return self:setZoom(self.app.D.termZoom - 1)
   end
 
-  -- AI panel owns the keyboard while open
-  if self.aiOpen and self.ai then
+  -- AI panel owns the keyboard while open (unless its focus is the terminal)
+  if chatFocus then
     if key == "escape" then
       -- single Esc closes the panel (cancels a running request first)
       if not self.ai:cancel() then
@@ -864,7 +928,7 @@ function Term:keypressed(key, m)
 end
 
 function Term:textinput(t)
-  if self.aiOpen and self.ai then
+  if self.aiOpen and self.ai and not self.ai.focusTerm then
     self.ai:textinput(t)
     return
   end
@@ -945,6 +1009,9 @@ function Term:mousepressed(mx, my, b)
       self:download(path)
     end
     return
+  end
+  if self.aiOpen and self.ai then
+    self.ai:setFocus(true)
   end
   local tv = self:view()
   local cx, cy = self:cellAt(mx, my)

@@ -72,6 +72,7 @@ function UI.field(label, value, opts)
   f.value = value or ""
   f.masked = opts.masked or false
   f.numeric = opts.numeric or false
+  f.multiline = opts.multiline or false -- Shift+Enter / pasted newlines kept
   f.placeholder = opts.placeholder or ""
   f.maxLen = opts.maxLen or 256
   f.focused = false
@@ -136,7 +137,15 @@ function Field:acceptSuggestion()
 end
 
 function Field:textinput(t)
-  if not utf8.len(t) or t:find("[%z\1-\31\127]") then
+  if not utf8.len(t) then
+    return false
+  end
+  if self.multiline then
+    t = t:gsub("\r\n", "\n"):gsub("\r", "\n")
+    if t:find("[%z\1-\8\11-\31\127]") then
+      return false
+    end
+  elseif t:find("[%z\1-\31\127]") then
     return false
   end
   if self.numeric and not t:match("^%d+$") then
@@ -173,6 +182,9 @@ function Field:keypressed(key, m)
   if key == "space" and m and m.ctrl then
     return self:acceptSuggestion()
   end
+  if self.multiline and (key == "return" or key == "kpenter") and m and (m.shift or m.alt) then
+    return self:textinput("\n")
+  end
   if key == "backspace" then
     if m and (m.alt or m.gui) then
       self.value = ""
@@ -182,7 +194,11 @@ function Field:keypressed(key, m)
     return true
   elseif key == "v" and m and (m.gui or (m.ctrl and m.shift)) then
     local clip = love.system.getClipboardText() or ""
-    clip = clip:gsub("[\r\n]", "")
+    if self.multiline then
+      clip = clip:gsub("\r\n", "\n"):gsub("\r", "\n"):gsub("%s+$", "")
+    else
+      clip = clip:gsub("[\r\n]", "")
+    end
     self:textinput(clip)
     return true
   elseif key == "u" and m and m.ctrl then
@@ -192,9 +208,21 @@ function Field:keypressed(key, m)
   return false
 end
 
+-- Lines of a multi-line value (a single-line field has one).
+function Field:lines()
+  local out = {}
+  for line in (self.value .. "\n"):gmatch("(.-)\n") do
+    out[#out + 1] = line
+  end
+  return out
+end
+
 function Field:display()
   if self.masked then
     return string.rep("*", utf8.len(self.value) or #self.value)
+  end
+  if self.multiline then
+    return (self.value:gsub("\n", "⏎"))
   end
   return self.value
 end

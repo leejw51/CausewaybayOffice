@@ -73,12 +73,14 @@ function K.appChord(key, m)
       return "new"
     elseif key == "k" then
       return m.shift and "history" or "search"
+    elseif key == "g" then
+      return "agi"
     elseif key == "r" then
       return "rename"
     elseif key == "tab" then
       return m.shift and "cycleBack" or "cycle"
     elseif key == "space" then
-      return "ai"
+      return m.shift and "aiFocus" or "ai"
     elseif key == "," then
       return "settings"
     elseif key == "v" and m.shift then

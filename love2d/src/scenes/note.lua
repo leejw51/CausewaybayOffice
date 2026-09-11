@@ -1,6 +1,8 @@
 -- Full-screen note reader (READ in the AI panel's NOTES list). The whole
 -- note in the terminal font, scrollable. COPY puts it on the clipboard for
 -- other tools, TERM reviews it as terminal input, DEL removes it. Esc closes.
+-- With readOnly (chat answers, tool results) there is no DEL and the frame
+-- carries the given title.
 
 local UI = require("src.ui")
 
@@ -17,6 +19,8 @@ function Note.new(app, p)
     ts_ms = p.ts_ms,
     sessionId = p.sessionId,
     panel = p.panel,
+    title = p.title or "NOTE",
+    readOnly = p.readOnly == true,
     scroll = 0,
     maxScroll = 0,
     buttons = {},
@@ -41,6 +45,9 @@ function Note:toTerminal()
 end
 
 function Note:delete()
+  if self.readOnly then
+    return false
+  end
   if self.panel and self.panel:deleteNote(self.id) then
     self.app.pop(self)
     return true
@@ -103,19 +110,19 @@ function Note:draw()
   local D, G = app.D, app.G
   local w, h = D.vw - 16, D.vh - 16
   local a = self.alpha or 1
-  local x, y = UI.frame("NOTE", w, h, D.vw, D.vh, a)
+  local x, y = UI.frame(self.title, w, h, D.vw, D.vh, a)
   self.frame = { x, y, w, h }
   self.buttons = {}
   -- buttons, right aligned in the title row
   local bx = x + w - 12
   local defs = {
-    {
+    not self.readOnly and {
       "DEL",
       "lred",
       function()
         self:delete()
       end,
-    },
+    } or nil,
     {
       "TERM",
       "yellow",
@@ -131,7 +138,14 @@ function Note:draw()
       end,
     },
   }
-  for _, d in ipairs(defs) do
+  local list = {}
+  for _, d in pairs(defs) do
+    list[#list + 1] = d
+  end
+  table.sort(list, function(a, b)
+    return a[1] < b[1]
+  end)
+  for _, d in ipairs(list) do
     local bw = G.uiWidth(d[1]) + 12
     bx = bx - bw
     G.panel(bx, y + 5, bw, 16, "ink", d[2], a)
@@ -167,7 +181,7 @@ function Note:draw()
   UI.hints({
     { "C/Enter", "copy" },
     { "T", "to terminal" },
-    { "D", "delete" },
+    self.readOnly and { "↑↓", "scroll" } or { "D", "delete" },
     { "↑↓ PgUp/Dn", "scroll" },
     { "Esc", "close" },
   }, x + 12, y + h - 18, w - 24)
