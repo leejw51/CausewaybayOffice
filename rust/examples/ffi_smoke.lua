@@ -156,13 +156,15 @@ assert(lib.cbo_jsonl_save("favorites", '{"rows":[]}') == -1, "a snapshot name is
 assert(lib.cbo_jsonl_save("../escape", '{"rows":[]}') == -1, "a path is refused")
 assert(lib.cbo_jsonl_save("apikeys", "{nope") == -1, "malformed json is refused")
 assert(s(lib.cbo_jsonl_load("apikeys")):find("sk-銅鑼灣", 1, true), "a failed save keeps the file")
--- the key file must not be world readable
-local mode = io.popen("stat -f '%Lp' '" .. s(lib.cbo_data_dir()) .. "/apikeys.jsonl' 2>/dev/null")
-if mode then
-  local perms = (mode:read("*a") or ""):gsub("%s", "")
-  mode:close()
-  assert(perms == "" or perms == "600", "apikeys.jsonl must be private, got " .. perms)
-end
+-- BSD stat (macOS) and GNU stat (Linux) use different permission formats.
+-- Missing or malformed output must fail, rather than skip the privacy check.
+local keyPath = s(lib.cbo_data_dir()) .. "/apikeys.jsonl"
+local quotedPath = "'" .. keyPath:gsub("'", "'\\''") .. "'"
+local stat = ffi.os == "OSX" and "stat -f '%Lp' " or "stat -c '%a' -- "
+local mode = assert(io.popen(stat .. quotedPath), "cannot inspect key file permissions")
+local perms = (mode:read("*a") or ""):gsub("%s", "")
+mode:close()
+assert(perms == "600", "apikeys.jsonl must be private, got " .. perms)
 print("jsonl store ABI OK (mode " .. tostring(s(lib.cbo_data_dir())) .. "/apikeys.jsonl)")
 
 -- MCP server (0.4 ABI): start on a free port, speak JSON-RPC, drain the inbox.
