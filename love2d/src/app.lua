@@ -200,13 +200,22 @@ local function loadScene(name, params)
   return inst
 end
 
+-- The lobby is one of three layouts. `scenes/lobby.lua` is no longer one of
+-- them: it survives as a helper module (columnsFor, ledFrame, heroStrip), so
+-- App.sceneName is never "lobby" and nothing may test for that string.
+local LOBBY_VIEWS = { map = true, map2 = true, map3 = true }
+
+function App.isLobby(name)
+  return LOBBY_VIEWS[name] == true
+end
+
 function App.lobbyView()
   local view = Config.get().lobbyView
   return (view == "map" or view == "map3") and view or "map2"
 end
 
 local function rememberLobby(name)
-  if (name == "map" or name == "map2" or name == "map3") and Config.get().lobbyView ~= name then
+  if App.isLobby(name) and Config.get().lobbyView ~= name then
     Config.get().lobbyView = name
     Config.save()
   end
@@ -220,7 +229,7 @@ function App.switch(name, params)
   if name == "lobby" then
     name = App.lobbyView()
   end
-  if name == App.sceneName and (name == "map" or name == "map2" or name == "map3") then
+  if name == App.sceneName and App.isLobby(name) then
     return true
   end
   require("src.ui").flush()
@@ -235,10 +244,8 @@ function App.switch(name, params)
     fx.fadeIn(0.6)
     return true
   end
-  local outgoing = (App.sceneName == "map" or App.sceneName == "map2" or App.sceneName == "map3")
-    and name == "terminal"
-  local incoming = App.sceneName == "terminal"
-    and (name == "map" or name == "map2" or name == "map3")
+  local outgoing = App.isLobby(App.sceneName) and name == "terminal"
+  local incoming = App.sceneName == "terminal" and App.isLobby(name)
   if incoming then
     params = params or {}
     params.select = App.scene.id
@@ -667,6 +674,25 @@ function App.textinput(t)
   end
 end
 
+-- An overlay is drawn translated by its slide offset (App.drawOverlay), so a
+-- click has to be un-translated by the same amount or the ~0.28 s slide-in
+-- lands every hit test up to 24 px away from what the user sees. The scene
+-- underneath never slides, hence 0 for it.
+local function slideOf(target)
+  for _, ov in ipairs(App.overlays) do
+    if ov == target then
+      return math.floor(ov.slide or 0)
+    end
+  end
+  return 0
+end
+
+-- Screen pixels -> the coordinates `target` was actually drawn at.
+function App.toTarget(target, x, y)
+  local vx, vy = D.toVirtual(x, y)
+  return vx, vy - slideOf(target)
+end
+
 function App.mousepressed(x, y, b)
   if y / D.s < D.toolbarH then
     if b == 1 then
@@ -690,7 +716,7 @@ function App.mousepressed(x, y, b)
   end
   local target = App.top()
   if target and target.mousepressed then
-    local vx, vy = D.toVirtual(x, y)
+    local vx, vy = App.toTarget(target, x, y)
     target:mousepressed(vx, vy, b)
   end
 end
@@ -698,7 +724,7 @@ end
 function App.mousereleased(x, y, b)
   local target = App.top()
   if target and target.mousereleased then
-    local vx, vy = D.toVirtual(x, y)
+    local vx, vy = App.toTarget(target, x, y)
     target:mousereleased(vx, vy, b)
   end
 end
@@ -706,7 +732,7 @@ end
 function App.mousemoved(x, y, dx, dy)
   local target = App.top()
   if target and target.mousemoved then
-    local vx, vy = D.toVirtual(x, y)
+    local vx, vy = App.toTarget(target, x, y)
     target:mousemoved(vx, vy, dx / D.s, dy / D.s)
   end
 end

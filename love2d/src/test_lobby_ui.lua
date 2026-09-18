@@ -45,6 +45,16 @@ function M.run(App, check)
     end
   end
   settle()
+  -- `lobby` is a request, not a scene: App.switch resolves it to a layout, so
+  -- App.sceneName is never "lobby" and App.isLobby is the question to ask.
+  check(
+    "App.isLobby knows the three layouts and nothing else",
+    App.isLobby("map")
+      and App.isLobby("map2")
+      and App.isLobby("map3")
+      and not App.isLobby("lobby")
+      and not App.isLobby("terminal")
+  )
   for _, view in ipairs({ "map", "map2", "map3" }) do
     App.switch(view)
     settle()
@@ -316,6 +326,50 @@ function M.run(App, check)
       rec = App.sessions.open({ host = "lobby-test.example", user = "test", noRemember = true })
     end
   end
+  -- Map 3 has to answer every app chord the other two lobbies answer, or a key
+  -- Help advertises silently dies on one layout.
+  App.switch("map3")
+  settle()
+  local wall = App.scene
+  wall:refresh()
+  wall.sel = 1
+  wall.selectedId = wall.entries[1] and wall.entries[1].id
+  App.overlays = {}
+  wall:keypressed("r", { ctrl = true, shift = false, alt = false, gui = false })
+  check("Ctrl+R on the monitor wall opens rename", App.hasOverlay("rename"))
+  App.overlays = {}
+
+  -- CAT / BTC send ascii art as an argument, like WORD ART: a command the user
+  -- typed into Commander must survive clicking them.
+  wall.command.value = "uptime"
+  wall:sendArt("CAT")
+  check("CAT art keeps the typed command", wall.command.value == "uptime", wall.command.value)
+  wall:sendWordArt()
+  check("WORD ART keeps the typed command", wall.command.value == "uptime", wall.command.value)
+
+  -- App.drawOverlay draws an overlay translated by its slide offset, so input
+  -- has to be un-translated by the same amount: during the 0.28 s slide-in a
+  -- click would otherwise land up to 24 px from what the user sees.
+  local D = App.D
+  local seen
+  local sliding = {
+    name = "slide-probe",
+    alpha = 1,
+    slide = 24,
+    closing = false,
+    mousepressed = function(_, _, vy)
+      seen = vy
+    end,
+  }
+  App.overlays = { sliding }
+  local sx, sy = (D.ox + 10) * D.s, (D.oy + 124) * D.s
+  App.mousepressed(sx, sy, 1)
+  check("a sliding overlay is clicked where it is drawn", seen == 100, tostring(seen))
+  sliding.slide = 0
+  App.mousepressed(sx, sy, 1)
+  check("a settled overlay is clicked at face value", seen == 124, tostring(seen))
+  App.overlays = {}
+
   App.cfg.get().map3View = oldMap3
   App.cfg.get().lobbyView = oldView
   App.cfg.save()

@@ -9,7 +9,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help version core core-debug cdef start start-mock test test-unit test-core test-integration test-ui-integration test-ffi test-love test-live \
-        lint lint-lua lint-rust format fmt fmt-check check smoke art love verify-archive package package-smoke \
+        lint lint-lua lint-rust lint-consistency format fmt fmt-check check smoke art love verify-archive package package-smoke \
         app app-icon app-sign app-smoke notarize gatekeeper clean \
         require-love require-luajit require-cargo require-core
 
@@ -56,7 +56,8 @@ help:
 		'make test        all unit, integration, FFI and live UI tests; logs + JSON report' \
 		'make test-unit   Rust unit tests + in-engine UI suite' \
 		'make test-integration  Rust integrations + FFI + real SSH UI/restart checks' \
-		'make lint        byte-compile every Lua file + cargo clippy when installed' \
+		'make lint        byte-compile every Lua file + clippy + source consistency' \
+		'make lint-consistency  cross-file rules (phases wired, lobby, names); no GUI needed' \
 		'make format      stylua + cargo fmt' \
 		'make fmt-check   fail if stylua or rustfmt would change anything' \
 		'make check       formatting + lint + tests' \
@@ -170,7 +171,10 @@ test-core: require-cargo
 	cd $(RUST) && $(CARGO) test --release
 
 # The ssh tests (rust/tests/ssh_localhost.rs) need the local sshd; CBO_IT=1
-# forces them on. Live LLM tests require CBO_LIVE=1 (make test-live).
+# forces them on. run_tests.py sets CBO_IT=1 and CBO_LIVE=1 for every stage,
+# so any suite it drives spends provider credit when a key is in the
+# environment. `make test-live` is the provider-only subset, not the only
+# place live calls happen.
 test-integration: core require-love require-luajit
 	$(PYTHON) tools/run_tests.py --suite integration --cargo "$(CARGO)" --love "$(LOVE)" --luajit "$(LUAJIT)"
 
@@ -197,7 +201,13 @@ test-love: core require-love
 
 # A glob, not a list: what compiles must never depend on somebody remembering
 # to add a file.
-lint: lint-lua lint-rust
+lint: lint-lua lint-rust lint-consistency
+
+# Cross-file rules a compiler cannot see: a shots phase nobody runs, an
+# assertion about a scene that no longer exists, a lobby layout Help forgot.
+# Pure source reading, so CI runs it where LÖVE cannot go.
+lint-consistency:
+	@$(PYTHON) tools/check_consistency.py
 
 lint-lua: require-luajit
 	@status=0; n=0; \

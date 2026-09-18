@@ -24,16 +24,39 @@ prevent independent stages from running, so the report captures all failures.
 | Rust integration tests | Every `rust/tests/*.rs` target, discovered automatically: database, ABI, providers, SSE HTTP fixtures, names/search, real SSH and terminal rendering |
 | LuaJIT FFI | Every C header export resolves; persistence and recorder/search calls work through the real dylib |
 | LÖVE unit/regression suite | Fields, masks, layouts, input routing, map stages/panning, 100 sessions, JSONL restore model, names, and completion without execution |
-| Real UI `maps` | Two localhost sessions; both maps; portrait and panning; automatic favorites; empty stage connection form; SQLite field reuse; real echoed-command completion; zoom into the exact session and back; circular disconnect with other sessions/favorites retained |
-| Real UI `aichat` | Open chat through its shortcut, click SEND, receive a real provider response, review insertion, and verify chat below the terminal in portrait and beside it in landscape |
-| Real UI `assist` | Assist page against the real core: a code answer with RUN/PRACTICE, local practice with no shell writes, a delayed real command that requires its completion marker, the AGI page adding a live tool, the playground reporting a provider, and an external `curl` JSON-RPC call to the MCP server arriving as a bubble |
-| Real UI `restorewrite` | Connect two sessions, rename one and exit while retaining their JSONL restore records |
-| Real UI `restoreread` | A separate app process loads the records, reconnects both, verifies names and persists an explicit close |
+| Source consistency | `tools/check_consistency.py`: every `--shots` phase is wired into the runner or listed as deliberately unwired, nothing asserts a scene the lobby no longer has, Help names every lobby layout, all three lobbies answer the same chords, the auto-name check still matches the names `sessions.lua` builds. No GUI, so CI runs it too |
+| Real UI walkthroughs | Every phase in `PHASES` in `tools/run_tests.py`, cheapest first: `display limit files folders commander map portrait mock polish monitors maps aichat assist kitty notes hotnote qa verify nav nav2 map3 map3verify display3 restorewrite restoreread` |
 
-The full runner sets `CBO_IT=1` and `CBO_LIVE=1`. Each Rust target and independent
-walkthrough gets a fresh temporary `CBO_HOME`; the restart pair shares one directory
-across two processes. Real user favorites, settings, history and restore records are
-not used. LÖVE tests/screenshots also use separate application save identities.
+Phases of note:
+
+| Phase | Coverage |
+| --- | --- |
+| `qa` | The docs/QA_CHECKLIST walkthrough against localhost: boot, connect, Unicode widths, AI panel reflow, zoom, bezel, disconnect and slot reuse, settings persistence |
+| `maps` | Two localhost sessions; both maps; portrait and panning; automatic favorites; empty stage connection form; SQLite field reuse; real echoed-command completion; zoom into the exact session and back; circular disconnect with other sessions/favorites retained |
+| `aichat` | Open chat through its shortcut, click SEND, receive a real provider response, review insertion, and verify chat below the terminal in portrait and beside it in landscape |
+| `assist` | Assist page against the real core: a code answer with RUN/PRACTICE, local practice with no shell writes, a delayed real command that requires its completion marker, the AGI page adding a live tool, the playground reporting a provider, and an external `curl` JSON-RPC call to the MCP server arriving as a bubble |
+| `files` / `folders` | SFTP browser, the in-app upload picker, terminal download picking, click-to-cd |
+| `commander` / `monitors` | Map 3 monitor wall: 100 simulated screens, WORD ART broadcast, focus and zoom |
+| `restorewrite` / `restoreread` | Connect two sessions, rename one and exit retaining their JSONL restore records; a separate process reloads them, reconnects both and persists an explicit close |
+
+Each `PHASES` row is `(phase, group, needs_mock)`. The group is both the temporary
+`CBO_HOME` and `CBO_QA_GROUP`, which scopes the LÖVE save-directory `config.json`
+that `config.lua` imports once into a fresh SQLite home. Two phases sharing a group
+share persisted settings **on purpose** — that is what a restart pair is
+(`qa`+`verify`, `nav`+`nav2`, `map3`+`map3verify`, `restorewrite`+`restoreread`) —
+and two phases in different groups cannot leak into each other. Before this was
+scoped, a single `--mock` phase writing that file seeded every later phase and every
+later run. `needs_mock` phases assert `App.core.mock` and must be launched with
+`--mock`; `check_consistency.py` fails the build if one is wired without it. The
+shell-side scratch directory follows the same group: `/tmp/cbo_qa-<group>`, because
+the `qa` phase wipes it on startup while `map3verify` reads what `map3` left in it.
+
+The full runner sets `CBO_IT=1` and `CBO_LIVE=1` for **every** stage, so `make test`
+spends provider credit whenever a key is in the environment — `make test-live` is the
+provider-only subset, not the only place live calls happen. Each Rust target and each
+walkthrough group gets a fresh temporary `CBO_HOME`. Real user favorites, settings,
+history and restore records are not used. LÖVE tests/screenshots use separate
+application save identities.
 
 Focused MCP security checks: `cargo test --manifest-path rust/Cargo.toml --release
 --lib mcp::tests`. These use temporary loopback sockets to check origin/host and
@@ -56,14 +79,25 @@ skipped checks. Check `skips` when evaluating coverage.
 - `make check`: formatting, Lua compilation, Clippy with warnings denied, then the full suite.
 - `make test-unit`: Rust library unit tests and the LÖVE regression suite.
 - `make test-integration`: every Rust integration target, FFI and real UI/restart checks.
-- `make test-ui-integration`: the four real UI walkthroughs only.
+- `make test-ui-integration`: the real UI walkthroughs only (every phase in `PHASES`).
+- `make lint-consistency`: the cross-file source rules on their own; needs no GUI.
 - `make test-live`: provider/embedding tests only.
 - `make test-ffi`: ABI smoke test only.
 - `make app`: rebuild the macOS application bundle and zip.
 
-`make start ARGS=--shots=maps` can also run the latest interactive walkthrough on
-its own. Other screenshot phases are developer art/diagnostic scripts, not additional
-unit-test targets.
+`make start ARGS=--shots=maps` can also run one walkthrough on its own; add
+`CBO_QA_GROUP=<name>` to give it its own settings, as the runner does.
+
+The phases that stay out of `make test` are listed, with a reason each, in `UNWIRED`
+in `tools/check_consistency.py`: `art` and `perf` (art capture and machine-specific
+fps sampling), `monitors100` (the 100-screen art variant of `monitors`), and
+`codeagent`/`codeagentgo` (they spend API credit and need a human to click ALLOW).
+Adding a phase without wiring it or listing it there fails CI — an unrun phase rots,
+which is how ten assertions about a scene that no longer exists survived sixteen
+commits.
+
+Note `--shots=map3` is the phase-3 *world map* walkthrough, not the Map 3 monitor
+wall; that one is `commander` / `monitors`.
 
 
 ## Live coding agent

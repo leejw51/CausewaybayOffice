@@ -214,10 +214,11 @@ wraps).
 * Every server you connect to is automatically saved as a **Favorite**, deduplicated
   by user, host and port. Favorites persist across restarts and are not evicted
   when more servers are added. They also appear in the connection form.
-* Choose **MAP 1** or **MAP 2** in the lobby header. That choice becomes the current
-  lobby and persists across restarts; Map 2 is the default. The terminal has one
-  **LOBBY** button. F2, Ctrl+Esc, double-Esc, and disconnect return to the selected
-  layout. Empty maps contain connection slots, not fabricated servers.
+* Choose **MAP 1**, **MAP 2** or **MAP 3** in the lobby header. That choice becomes
+  the current lobby and persists across restarts; Map 2 is the default. The terminal
+  has one **LOBBY** button. F2, Ctrl+Esc, double-Esc, and disconnect return to the
+  selected layout, and all three answer the same keys (Ctrl+N, Ctrl+K, Ctrl+R,
+  Ctrl+, and F1). Empty maps contain connection slots, not fabricated servers.
 
 Opening a session from either map eases the camera toward it with exponential
 zoom. Returning pulls back onto the same session. Explicit disconnects use a

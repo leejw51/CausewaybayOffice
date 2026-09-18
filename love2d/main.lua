@@ -45,11 +45,22 @@ function love.load(args)
   if testMode then
     love.filesystem.setIdentity("causewaybayoffice-test")
   elseif shots then
+    -- One save identity so every qa_*.png lands in one folder, but the
+    -- per-phase state is scoped by group: config.json is imported once into a
+    -- fresh SQLite home (config.lua), so a phase that writes it would
+    -- otherwise seed every later phase and every later run. Restart pairs
+    -- (qa/verify, nav/nav2, map3/map3verify) share a group on purpose;
+    -- tools/run_tests.py sets CBO_QA_GROUP for them.
     love.filesystem.setIdentity("causewaybayoffice-qa")
+    local group = os.getenv("CBO_QA_GROUP")
+    if not group or group == "" then
+      group = shots
+    end
+    require("src.config").FILE = "config-" .. group .. ".json"
     local ffi = require("ffi")
     ffi.cdef("int setenv(const char*, const char*, int);")
     if not os.getenv("CBO_HOME") then
-      ffi.C.setenv("CBO_HOME", love.filesystem.getSaveDirectory() .. "/core", 1)
+      ffi.C.setenv("CBO_HOME", love.filesystem.getSaveDirectory() .. "/core-" .. group, 1)
     end
   elseif forceMock or demo then
     love.filesystem.setIdentity("causewaybayoffice-demo")
