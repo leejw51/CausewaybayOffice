@@ -2,7 +2,7 @@
 -- Every step is a timer on the fx clock, so the app runs exactly as it does
 -- for a user: input goes through App.textinput / the scene's keypressed,
 -- screenshots come from love.graphics.captureScreenshot into the save dir
--- (~/Library/Application Support/LOVE/causewaybayoffice/qa_*.png).
+-- (~/Library/Application Support/LOVE/causewaybayoffice-qa/qa_*.png).
 --
 -- Phases:
 --   art     boot / lobby / connect / terminal / ai / settings (README art)
@@ -12,11 +12,20 @@
 --   limit   128-session limit against the black-hole host + lobby fps
 --   perf    3 sessions running `yes | head -c 5M`, fps sampled
 --   mock    (with --mock) the MOCK badge + connect without a core
---   hero    two lobby frames diffed: the hero's feet never move
 --   map     world map: 3 stages, hero walks to localhost and connects
 --   display F11 fullscreen and back (grid + core agree)
 --   portrait 800x1400 window: lobby columns, AI docked below, map fits width
---   phase 3 (src/shots_p3.lua): hero6 nav nav2 map3 map3verify display3
+--   files / folders  sftp browser, in-app picker, click-to-cd
+--   commander / monitors / monitors100  Map 3 monitor wall (monitors* need --mock)
+--   phase 3 (src/shots_p3.lua): nav nav2 map3 map3verify display3
+--
+-- `--shots=map3` is the phase-3 *world map* walkthrough, not the Map 3
+-- monitor wall; that one is `commander` / `monitors`.
+--
+-- Phases that must run with --mock: monitors, monitors100, mock, polish.
+-- Restart pairs share one CBO_HOME and one CBO_QA_GROUP, because the second
+-- half reads what the first persisted: qa+verify, nav+nav2, map3+map3verify,
+-- restorewrite+restoreread. tools/run_tests.py encodes both.
 
 local M = {}
 
@@ -118,6 +127,38 @@ function M.run(App, phase)
   local function term()
     return App.sceneName == "terminal" and App.scene or nil
   end
+
+  -- Each lobby keeps its visible sessions in its own field: Map 2 in `shown`
+  -- (entries with .rec), Map 3 in `entries` (records). Map 1 places hosts on
+  -- platforms and has neither, so it falls back to "the session is still
+  -- live". scenes/lobby.lua is not a scene any more, so nothing may assume it.
+  -- Settings, favorites and keys live in SQLite under the real core and in the
+  -- LOVE save directory only under the mock one (config.lua, sessions.lua), so
+  -- a persistence check has to ask the store, not the file.
+  local function stored(kvKey, file)
+    local raw = App.core.kvGet(kvKey)
+    if raw == "" then
+      raw = love.filesystem.read(file) or ""
+    end
+    return raw
+  end
+
+  local function lobbyShows(rec)
+    local sc = App.scene
+    if not rec or not sc or not App.isLobby(App.sceneName) then
+      return false
+    end
+    local list = sc.entries or sc.shown
+    if not list then
+      return App.sessions.get(rec.id) == rec
+    end
+    for _, e in ipairs(list) do
+      if e == rec or e.rec == rec then
+        return true
+      end
+    end
+    return false
+  end
   local function finish(extra)
     at(extra or 0.5, function()
       local text = table.concat(log, "\n") .. "\n"
@@ -148,7 +189,11 @@ function M.run(App, phase)
     end
   end)
 
-  local QA_DIR = "/tmp/cbo_qa"
+  -- Shell-side scratch, scoped by phase group like CBO_HOME and the settings
+  -- file (love2d/main.lua): the `qa` phase wipes this directory on startup, and
+  -- `map3verify` reads what `map3` left in it, so two phases may only share it
+  -- when they are a restart pair.
+  local QA_DIR = "/tmp/cbo_qa-" .. (os.getenv("CBO_QA_GROUP") or "local")
 
   -- phase 3 walkthroughs live in their own module
   local H = {
@@ -1622,7 +1667,7 @@ function M.run(App, phase)
     local user = os.getenv("USER") or "dev"
     local target, startX, sc
     at(3.4, function()
-      check("lobby reached", App.sceneName == "lobby")
+      check("lobby reached", App.isLobby(App.sceneName))
       App.sessions.hosts = {} -- exactly three stages for the capture
       App.sessions.rememberHost({ host = "10.255.255.1", port = 22, user = user })
       App.sessions.rememberHost({ host = "nosuch.invalid", port = 22, user = user })
@@ -1751,7 +1796,7 @@ function M.run(App, phase)
     at(0.8, function()
       check("auto orientation is portrait at 800x1400", D.portrait == true, D.vw .. "x" .. D.vh)
       check("portrait keeps the 2x ui scale", D.s == 2, D.s)
-      check("lobby columns <= 2", App.scene:columns() <= 2, App.scene:columns())
+      check("lobby columns <= 2", App.scene.cols <= 2, App.scene.cols)
       shot("qa_portrait_lobby")
       local cols, rows = App.termGrid()
       App.sessions.open({
@@ -1774,9 +1819,13 @@ function M.run(App, phase)
       local sc = App.scene
       local i = App.core.info(sc.id)
       check("AI panel docks below in portrait", Term.aiDock(D) == "bottom")
+      -- At least one title row above the cwd row, and the grid strictly below
+      -- the chrome. The old form pinned chromeTop to exactly two rows, which
+      -- stopped being true once the toolbar gained enough buttons to wrap in a
+      -- narrow window (test_lobby_ui checks they still do not overlap).
       check(
         "portrait terminal prints the full session name on a title row",
-        sc:chromeTop() == 2 * Term.TAB_H and sc.py >= (2 * Term.TAB_H) * D.s,
+        sc:chromeTop() >= 2 * Term.TAB_H and sc.py >= sc:chromeTop() * D.s,
         sc:chromeTop()
       )
       check("terminal keeps >= 24 rows with the panel open", sc.rows >= 24, sc.rows)
@@ -1813,72 +1862,11 @@ function M.run(App, phase)
     return
   end
 
-  if phase == "hero" then
-    -- two consecutive animation frames of the lobby hero: the feet/chair
-    -- region must not move (the strip is anchored bottom-centre)
-    local Lobby = require("src.scenes.lobby")
-    local rect, first
-    local function heroRect()
-      local hero = Lobby.heroStrip(App.G)
-      local sy = App.scene:shelfY()
-      local rx, ry = D.ox + 16, D.oy + sy + 3 - hero.fh
-      return { x = rx * D.s, y = ry * D.s, w = hero.fw * D.s, h = hero.fh * D.s }
-    end
-    at(3.4, function()
-      check("lobby reached", App.sceneName == "lobby")
-      rect = heroRect()
-      love.graphics.captureScreenshot(function(img)
-        first = img
-        img:encode("png", "qa_hero_a.png")
-      end)
-    end)
-    at(0.334, function()
-      love.graphics.captureScreenshot(function(img)
-        img:encode("png", "qa_hero_b.png")
-        -- only pixels the sprite itself paints (either frame) count: the
-        -- parallax scrolls behind the transparent parts of the figure
-        local hero = Lobby.heroStrip(App.G)
-        local function painted(sx, sy)
-          for f = 1, hero.n do
-            local _, _, _, a = hero.data:getPixel((f - 1) * hero.fw + sx, sy)
-            if a > 0.5 then
-              return true
-            end
-          end
-          return false
-        end
-        local function diff(y0, y1)
-          local d, tot = 0, 0
-          for y = y0, y1 - 1 do
-            for x = rect.x, rect.x + rect.w - 1 do
-              local sx = math.floor((x - rect.x) / D.s)
-              local sy = math.floor((y - rect.y) / D.s)
-              if painted(sx, sy) then
-                local r1, g1, b1 = first:getPixel(x, y)
-                local r2, g2, b2 = img:getPixel(x, y)
-                tot = tot + 1
-                if math.abs(r1 - r2) + math.abs(g1 - g2) + math.abs(b1 - b2) > 0.25 then
-                  d = d + 1
-                end
-              end
-            end
-          end
-          return d / math.max(1, tot)
-        end
-        local feet = diff(rect.y + math.floor(rect.h * 0.7), rect.y + rect.h)
-        local upper = diff(rect.y, rect.y + math.floor(rect.h * 0.7))
-        check(
-          "hero feet/chair region stable between frames",
-          feet < 0.01,
-          string.format("%.3f", feet)
-        )
-        info("hero upper region (hands/keyboard) change", string.format("%.3f", upper))
-      end)
-    end)
-    finish(0.6)
-    return
-  end
-
+  -- The `hero` and `hero6` phases photographed the seated hero on
+  -- scenes/lobby.lua. That scene stopped being reachable when the lobby became
+  -- Map 1 / Map 2 / Map 3 (App.lobbyView never returns "lobby"), so they were
+  -- testing pixels nothing draws. Retired 2026-09-18; test.lua still checks
+  -- that Lobby.heroStrip loads as a 2-frame strip.
   if phase == "mock" then
     at(3.2, function()
       check("mock badge: core is mock", App.core.mock == true)
@@ -1905,7 +1893,9 @@ function M.run(App, phase)
       check(
         "5.1 fake key survived restart (config.json)",
         k == "sk-qa-fake-key-1234567890" and src == "settings",
-        k
+        -- never the value: apiKey() falls back to the environment, so an
+        -- unexpected result here is somebody's real key
+        App.cfg.mask(k) .. " from " .. tostring(src)
       )
       check("5.1 masked in UI", App.cfg.mask(k) == "sk-********7890", App.cfg.mask(k))
       App.cfg.get().apiKeys.openai = ""
@@ -2134,8 +2124,8 @@ function M.run(App, phase)
     )
     firstName = rec and rec.name
     check(
-      "4.1 auto name adj-noun-NN",
-      firstName and firstName:match("^[%w]+%-[%w%-]+%-%d%d$") ~= nil,
+      "4.1 auto name <first-name>-<number>",
+      firstName and firstName:match("^%a+%-%d+$") ~= nil,
       firstName
     )
     shot("qa_lobby_one")
@@ -2280,10 +2270,17 @@ function M.run(App, phase)
     key("escape")
   end)
   at(1.2, function()
-    check("Esc double-tap -> lobby", App.sceneName == "lobby")
-    key("return")
+    check("Esc double-tap -> lobby", App.isLobby(App.sceneName))
   end)
-  at(1.0, function()
+  at(0.5, function()
+    -- A step of its own: terminal <-> lobby runs a 0.55 + 0.65 s camera
+    -- transition, App.switch refuses while one is running, and App.textinput
+    -- drops keystrokes. Pressing Return on the boundary silently does nothing.
+    check("Esc double-tap: transition finished", fx.transitioning ~= true)
+    key("return") -- reopen the selected card
+  end)
+  at(1.3, function()
+    check("back in the terminal after the double-tap", term() ~= nil)
     -- the first Esc of the double-tap went to zsh as a meta prefix: clear it
     App.core.write(term().id, " \x15")
   end)
@@ -2376,11 +2373,20 @@ function M.run(App, phase)
     local sc = term()
     App.core.write(sc.id, "\x04")
     shot("qa_ai_inserted")
-    key("escape") -- close the panel
+    -- Ctrl+Enter opened the review sheet (model output never reaches the shell
+    -- unreviewed), so an Esc here would close the sheet, not the panel.
+    if App.overlays[#App.overlays] then
+      App.pop()
+    end
+  end)
+  at(0.4, function()
+    check("AI panel is open before closing it", term().aiOpen == true)
+    key("space", ctrl) -- the AI chord closes it from either focus
   end)
   at(0.6, function()
     local sc = term()
     local inf = App.core.info(sc.id)
+    check("AI close: panel closed", sc.aiOpen ~= true)
     check("AI close: grid restored", sc.cols == colsBefore and inf.cols == colsBefore, sc.cols)
     line("echo $(tput cols)x$(tput lines) > " .. QA_DIR .. "/tput_after_ai.txt")
     line("clear")
@@ -2660,10 +2666,17 @@ function M.run(App, phase)
     key("escape", ctrl)
   end)
   at(1.2, function()
-    check("lobby via Ctrl+Esc", App.sceneName == "lobby")
+    check("lobby via Ctrl+Esc", App.isLobby(App.sceneName))
     shot("qa_lobby_three")
-    App.scene.sel = 3
-    App.scene:closeSelected()
+  end)
+  at(0.5, function()
+    -- Disconnect the third session the way every lobby's DISCONNECT button
+    -- does (lobby_views.disconnect). The old Lobby:closeSelected() belonged to
+    -- a scene that is no longer reachable. A step of its own: disconnectSession
+    -- refuses while the Ctrl+Esc transition is still running.
+    local rec = App.sessions.list[3]
+    check("4.9 third session is there to close", rec ~= nil)
+    check("4.9 DISCONNECT accepted", App.disconnectSession(rec) == true)
   end)
   at(0.4, function()
     shot("qa_lobby_closing")
@@ -2683,10 +2696,7 @@ function M.run(App, phase)
   at(0.6, function()
     local rec = App.sessions.list[3]
     check("4.9 freed slot id reused", rec and rec.id == thirdId, rec and rec.id)
-    check(
-      "4.9 reused card slides in (anim reset)",
-      rec and App.scene.anim[rec.id] and App.scene.anim[rec.id].scale == 1
-    )
+    check("4.9 the lobby lists the reused session", lobbyShows(rec), App.sceneName)
     shot("qa_lobby_reused")
     App.push("settings")
   end)
@@ -2707,15 +2717,23 @@ function M.run(App, phase)
       ov:valueText(ov.rows[5]) == "sk-********7890",
       ov:valueText(ov.rows[5])
     )
-    local raw = love.filesystem.read("config.json") or ""
-    check("5.1 config.json holds the key", raw:find("sk-qa-fake-key-1234567890", 1, true) ~= nil)
+    local rows = App.core.jsonlLoad(App.cfg.KEYS_FILE) or {}
+    local keyed = false
+    for _, row in ipairs(rows) do
+      keyed = keyed or (row.provider == "openai" and row.key == "sk-qa-fake-key-1234567890")
+    end
+    check("5.1 the key is persisted (apikeys.jsonl)", keyed)
+    check(
+      "5.1 the key is persisted (settings store)",
+      stored("apikey.openai", App.cfg.FILE):find("sk-qa-fake-key-1234567890", 1, true) ~= nil
+    )
     shot("qa_settings")
     key("escape")
   end)
   at(0.5, function()
     check("mock badge hidden with the real core", not App.core.mock)
-    local hosts = love.filesystem.read("hosts.json") or ""
-    check("4.10 hosts.json remembers localhost", hosts:find("localhost", 1, true) ~= nil)
+    local hosts = stored("ui.hosts", App.sessions.FILE)
+    check("4.10 favorites remember localhost", hosts:find("localhost", 1, true) ~= nil)
   end)
   finish(0.5)
 end

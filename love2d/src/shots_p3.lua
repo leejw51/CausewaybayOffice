@@ -20,7 +20,11 @@
 
 local M = {}
 
-local QA_DIR = "/tmp/cbo_qa"
+-- Shell-side scratch, scoped by phase group like CBO_HOME and the settings
+-- file (love2d/main.lua): the `qa` phase wipes this directory on startup, and
+-- `map3verify` reads what `map3` left in it, so two phases may only share it
+-- when they are a restart pair.
+local QA_DIR = "/tmp/cbo_qa-" .. (os.getenv("CBO_QA_GROUP") or "local")
 
 function M.run(App, phase, H)
   local fx, D = App.fx, App.D
@@ -43,6 +47,18 @@ function M.run(App, phase, H)
       noRemember = noRemember,
     })
   end
+  -- Favorites live in SQLite under the real core and in the LOVE save directory
+  -- only under the mock one (sessions.lua saveHosts), so a persistence check
+  -- has to ask the store. Reading the file directly returns "" against the real
+  -- core, which makes a "does not contain" assertion pass for the wrong reason.
+  local function storedHosts()
+    local raw = App.core.kvGet("ui.hosts")
+    if raw == "" then
+      raw = love.filesystem.read(App.sessions.FILE) or ""
+    end
+    return raw
+  end
+
   local function fileRead(path)
     local f = io.open(path, "rb")
     if not f then
@@ -69,181 +85,11 @@ function M.run(App, phase, H)
     App.mousereleased(x, y, b or 1)
   end
 
-  -- hero6 --------------------------------------------------------------------
-  if phase == "hero6" then
-    local Lobby = require("src.scenes.lobby")
-    local frames = {} -- ImageData
-    local rect
-    local function heroRect()
-      local hero = Lobby.heroStrip(G)
-      local sy = App.scene:shelfY()
-      local rx, ry = D.ox + 16, D.oy + sy + 3 - hero.fh
-      return { x = rx * D.s, y = ry * D.s, w = hero.fw * D.s, h = hero.fh * D.s, fh = hero.fh }
-    end
-    local hero
-    -- pixels the sprite paints in *both* frames: the parallax scrolls behind
-    -- the parts only one frame covers, so those cannot be compared
-    local function painted(sx, sy)
-      for f = 1, hero.n do
-        local _, _, _, a = hero.data:getPixel((f - 1) * hero.fw + sx, sy)
-        if a <= 0.5 then
-          return false
-        end
-      end
-      return true
-    end
-    -- rows (frame px) where the two strip frames differ: the hands band
-    local function handsBand()
-      local r0, r1 = nil, nil
-      for y = 0, hero.fh - 1 do
-        if G.frameDiff(hero, 1, 2, 0, y, hero.fw, 1) > 0 then
-          r0 = r0 or y
-          r1 = y
-        end
-      end
-      return r0 or 0, r1 or -1
-    end
-    -- fraction of sprite-painted pixels that differ between two captures in a
-    -- band of the hero rect (y0..y1 as fractions of the height)
-    local function diff(a, b, f0, f1)
-      local d, tot = 0, 0
-      for y = rect.y + math.floor(rect.h * f0), rect.y + math.floor(rect.h * f1) - 1 do
-        for x = rect.x, rect.x + rect.w - 1 do
-          local sx = math.floor((x - rect.x) / D.s)
-          local sy = math.floor((y - rect.y) / D.s)
-          if painted(sx, sy) then
-            local r1, g1, b1 = a:getPixel(x, y)
-            local r2, g2, b2 = b:getPixel(x, y)
-            tot = tot + 1
-            if math.abs(r1 - r2) + math.abs(g1 - g2) + math.abs(b1 - b2) > 0.25 then
-              d = d + 1
-            end
-          end
-        end
-      end
-      return d / math.max(1, tot)
-    end
-    local drawn = {} -- (x, y) handed to drawAnchored for the lobby hero
-    local origAnchored = G.drawAnchored
-    local consecutive = 0
-    local origDraw = App.draw
-    at(3.4, function()
-      check("lobby reached", App.sceneName == "lobby")
-      hero = Lobby.heroStrip(G)
-      rect = heroRect()
-      check("hero strip is a 2-frame cycle", hero.n == 2, hero.n)
-      G.drawAnchored = function(strip, i, x, y, sx, a)
-        if strip == hero then
-          drawn[#drawn + 1] = { x = x, y = y }
-        end
-        return origAnchored(strip, i, x, y, sx, a)
-      end
-      -- 6 consecutive frames straight from love.draw
-      App.draw = function()
-        origDraw()
-        if consecutive < 6 then
-          consecutive = consecutive + 1
-          local k = consecutive
-          love.graphics.captureScreenshot(function(img)
-            frames[k] = img
-            if k == 1 or k == 6 then
-              img:encode("png", "qa_hero6_c" .. k .. ".png")
-            end
-          end)
-        end
-      end
-    end)
-    at(0.3, function()
-      App.draw = origDraw
-      check("6 consecutive frames captured", #frames == 6, #frames)
-      local worst = 0
-      for k = 2, 6 do
-        worst = math.max(worst, diff(frames[1], frames[k], 0, 1))
-      end
-      check(
-        "6 consecutive frames (same animation frame): whole hero identical",
-        worst < 0.001,
-        string.format("%.4f", worst)
-      )
-    end)
-    -- 6 spaced frames over ~1 s (3 fps cycle -> both frames appear)
-    local spaced = {}
-    for k = 1, 6 do
-      at(0.17, function()
-        love.graphics.captureScreenshot(function(img)
-          spaced[k] = img
-          img:encode("png", "qa_hero6_s" .. k .. ".png")
-        end)
-      end)
-    end
-    at(0.3, function()
-      check("6 spaced frames captured", #spaced == 6, #spaced)
-      local r0, r1 = handsBand()
-      local h0, h1 = r0 / hero.fh, (r1 + 1) / hero.fh
-      local bands = {}
-      for b = 0, 9 do
-        local y0 = math.floor(hero.fh * b / 10)
-        local y1 = math.floor(hero.fh * (b + 1) / 10)
-        bands[#bands + 1] =
-          string.format("%d%%:%.3f", b * 10, G.frameDiff(hero, 1, 2, 0, y0, hero.fw, y1 - y0))
-      end
-      info("strip frame 1 vs 2 diff per 10% band", table.concat(bands, " "))
-      info(
-        "hands band (rows that differ between the strip frames)",
-        string.format("%d..%d of %d px (%.0f%%..%.0f%%)", r0, r1, hero.fh, h0 * 100, h1 * 100)
-      )
-      local aboveWorst, belowWorst, feetWorst, handsMax = 0, 0, 0, 0
-      local distinct = {} -- clusters over the hands band
-      for k = 1, 6 do
-        if k > 1 then
-          aboveWorst = math.max(aboveWorst, diff(spaced[1], spaced[k], 0, h0))
-          belowWorst = math.max(belowWorst, diff(spaced[1], spaced[k], h1, 1))
-          feetWorst = math.max(feetWorst, diff(spaced[1], spaced[k], 0.66, 1))
-          handsMax = math.max(handsMax, diff(spaced[1], spaced[k], h0, h1))
-        end
-        local found = false
-        for _, c in ipairs(distinct) do
-          if diff(spaced[c], spaced[k], h0, h1) < 0.002 then
-            found = true
-          end
-        end
-        if not found then
-          distinct[#distinct + 1] = k
-        end
-      end
-      check("hands band sits above the locked lower body (< 66%)", r1 >= 0 and h1 <= 0.66 + 1e-9)
-      check(
-        "head/torso above the hands identical across all 6 frames",
-        aboveWorst < 0.001,
-        string.format("%.4f", aboveWorst)
-      )
-      check(
-        "legs/chair/desk below the hands identical across all 6 frames",
-        belowWorst < 0.001,
-        string.format("%.4f", belowWorst)
-      )
-      check(
-        "feet/chair region (bottom 34%) identical across all 6 frames",
-        feetWorst < 0.001,
-        string.format("%.4f", feetWorst)
-      )
-      check("hands/keyboard band animates", handsMax > 0.005, string.format("%.4f", handsMax))
-      check("exactly 2 distinct frames in the cycle", #distinct == 2, #distinct)
-      local intOK, n = true, 0
-      for _, p in ipairs(drawn) do
-        n = n + 1
-        if p.x ~= math.floor(p.x) or p.y ~= math.floor(p.y) then
-          intOK = false
-        end
-      end
-      check("lobby hero drawn at integer px every frame", intOK and n > 0, n)
-      G.drawAnchored = origAnchored
-    end)
-    finish(0.4)
-    return true
-  end
-
-  -- nav ----------------------------------------------------------------------
+  -- The `hero` and `hero6` phases photographed the seated hero on
+  -- scenes/lobby.lua. That scene stopped being reachable when the lobby became
+  -- Map 1 / Map 2 / Map 3 (App.lobbyView never returns "lobby"), so they were
+  -- testing pixels nothing draws. Retired 2026-09-18; test.lua still checks
+  -- that Lobby.heroStrip loads as a 2-frame strip.
   if phase == "nav" then
     local rec
     at(3.4, function()
@@ -257,9 +103,13 @@ function M.run(App, phase, H)
       check("connected", rec.state == App.core.ST.CONNECTED)
       App.switch("terminal", { id = rec.id })
     end)
-    at(1.0, function()
+    -- 1.3 s, not 1.0: lobby <-> terminal runs the 0.55 + 0.65 s camera
+    -- transition, and App.textinput drops everything while one is running, so
+    -- typing any earlier is silently swallowed.
+    at(1.3, function()
       local sc = term()
       check("terminal reached", sc ~= nil)
+      check("no transition is swallowing input", fx.transitioning ~= true)
       check("first entry: toast shown", sc.toast ~= nil and sc.toast.a > 0.5)
       check("seenTermHint persisted", App.cfg.get().seenTermHint == true)
       shot("qa_nav_toast")
@@ -335,30 +185,57 @@ function M.run(App, phase, H)
           local x, y = toWindow(sc.ox + 40, sc.oy + 40)
           App.mousepressed(x, y, 2)
           check("context menu opened", App.hasOverlay("menu"))
-          key("return") -- first item: Back to lobby
+          -- By label, not by index: the session menu has grown items above it.
+          local ov = App.overlays[#App.overlays]
+          local back
+          for i, item in ipairs(ov.items or {}) do
+            if item[1]:find("Back to lobby", 1, true) then
+              back = i
+            end
+          end
+          check("context menu offers Back to lobby", back ~= nil)
+          ov.sel = back or 1
+          key("return")
         end,
       },
     }
+    local fadeAt
     for _, w in ipairs(ways) do
       at(0.4, function()
         check(w[1] .. ": starting in the terminal", App.sceneName == "terminal")
         w[2]()
         check(w[1] .. ": fade started (transition)", fx.transitioning == true)
       end)
+      -- Nothing cuts: the fade is already on its way out at the first sample and
+      -- deeper at the second. Sampled as a progression rather than against a
+      -- number, because terminal <-> lobby uses its own 0.55 / 0.65 s camera
+      -- durations (App.switch) instead of the 0.22 s default.
       at(0.2, function()
-        -- 0.22 s expo-in fade: a = 2^(10(u-1)) -> ~0.5 at 0.2 s (0.04 at 0.12 s)
+        fadeAt = fx.fade.a
         check(
-          w[1] .. ": fading (fade.a > 0.4 at 0.2 s)",
-          fx.fade.a > 0.4,
-          string.format("%.2f", fx.fade.a)
+          w[1] .. ": fading, not cutting",
+          fx.fade.a > 0 and fx.transitioning == true,
+          string.format("%.3f", fx.fade.a)
         )
       end)
-      at(0.82, function()
-        check(w[1] .. ": lobby reached", App.sceneName == "lobby")
+      at(0.3, function()
+        check(
+          w[1] .. ": fade deepens toward the swap",
+          fx.fade.a > fadeAt,
+          string.format("%.3f -> %.3f", fadeAt, fx.fade.a)
+        )
+      end)
+      at(0.52, function()
+        check(w[1] .. ": lobby reached", App.isLobby(App.sceneName))
         if w[1] == "Esc Esc (< 300 ms)" then
           -- the first Esc reached zsh as a meta prefix: clear it
           App.core.write(rec.id, " \x15")
         end
+      end)
+      at(0.6, function()
+        -- App.switch refuses while a transition runs, and the lobby appears at
+        -- the darkest point, half way through one.
+        check(w[1] .. ": transition finished", fx.transitioning ~= true)
         key("return") -- back into the terminal (card selected)
       end)
       at(0.9, function()
@@ -443,7 +320,7 @@ function M.run(App, phase, H)
     end
 
     at(3.4, function()
-      check("lobby reached", App.sceneName == "lobby")
+      check("lobby reached", App.isLobby(App.sceneName))
       S.hosts = {}
       S.rememberHost({ host = "localhost", port = 22, user = user })
       S.rememberHost({ host = "10.255.255.1", port = 22, user = user })
@@ -454,14 +331,17 @@ function M.run(App, phase, H)
         keys[h.host] = S.hostKey(h)
       end
       S.saveHosts()
-      -- open from the lobby MAP button
+      -- Open Map 1 from the lobby's own MAP 1 button. lobby_views.draw gives
+      -- every layout button an id, which is stable across the three lobbies;
+      -- the old width probe matched the retired lobby scene's "MAP" button.
+      App.scene:draw()
       local mapBtn
       for _, b in ipairs(App.scene.buttons) do
-        if b.w == G.uiWidth("MAP") + 12 then
+        if b.id == "map" then
           mapBtn = b
         end
       end
-      check("lobby MAP button present", mapBtn ~= nil)
+      check("lobby MAP 1 button present", mapBtn ~= nil)
       if mapBtn then
         clickButton(mapBtn, 1)
       end
@@ -484,9 +364,9 @@ function M.run(App, phase, H)
           slotOf["nosuch.invalid"]
         )
       )
-      -- hosts.json already carries the indices (saved by mapHosts)
-      local raw = love.filesystem.read("hosts.json") or ""
-      check("hosts.json holds platform indices", raw:find('"platform"', 1, true) ~= nil)
+      -- favorites already carry the indices (saved by mapHosts)
+      local raw = storedHosts()
+      check("favorites hold platform indices", raw:find('"platform"', 1, true) ~= nil)
       local reloaded = S.loadHosts()
       local same = true
       for _, h in ipairs(reloaded) do
@@ -543,9 +423,12 @@ function M.run(App, phase, H)
       key("escape")
     end)
     at(0.9, function()
-      check("Esc on the map -> lobby", App.sceneName == "lobby")
-      key("m")
-      check("key M starts a fade", fx.transitioning == true)
+      -- Map 1 is the chosen lobby here, so Escape has nowhere to fall back to:
+      -- App.switch("lobby") resolves to App.lobbyView(), which is this scene.
+      -- There is no separate lobby scene behind it any more.
+      check("Esc on the map stays in the lobby", App.isLobby(App.sceneName))
+      check("... on Map 1 itself", App.sceneName == "map", App.sceneName)
+      check("... without a transition", fx.transitioning ~= true)
     end)
     -- walk: park the hero on the typhoon-shelter node (slot 3), walk to
     -- localhost (slot 1) over the flat harbourfront segment 2 -> 1
@@ -554,7 +437,7 @@ function M.run(App, phase, H)
     local walkT0, walkDur, path
     at(1.0, function()
       sc = map()
-      check("map opened with key M", sc ~= nil)
+      check("still on Map 1 for the walk", sc ~= nil)
       sc.hero.slot = 3
       sc:placeHero(true)
       sc.sel = 1
@@ -724,11 +607,13 @@ function M.run(App, phase, H)
       key("f2")
     end)
     -- live focus: clicking the online node focuses the session, no second one
-    at(1.0, function()
-      check("lobby", App.sceneName == "lobby")
-      key("m")
+    at(1.4, function()
+      -- terminal -> lobby is the 0.55 + 0.65 s camera transition; the lobby is
+      -- Map 1, so there is nothing further to open
+      check("lobby", App.isLobby(App.sceneName))
+      check("lobby transition finished", fx.transitioning ~= true)
     end)
-    at(0.9, function()
+    at(0.5, function()
       sc = map()
       check("map again", sc ~= nil)
       check("hero starts on the last used host", sc.hero.slot == 1, sc.hero.slot)
@@ -782,10 +667,11 @@ function M.run(App, phase, H)
       key("f2")
     end)
     -- Enter / R / Del in the info panel
-    at(1.0, function()
-      key("m")
+    at(1.4, function()
+      check("F2 returned to Map 1", App.sceneName == "map", App.sceneName)
+      check("F2 transition finished", fx.transitioning ~= true)
     end)
-    at(0.9, function()
+    at(0.5, function()
       sc = map()
       sc.sel = 3
       key("r")
@@ -846,8 +732,12 @@ function M.run(App, phase, H)
     end)
     at(0.4, function()
       check("Del + Enter forgets the host", S.findHost(keys["nosuch.invalid"]) == nil)
-      local raw = love.filesystem.read("hosts.json") or ""
-      check("... and hosts.json no longer lists it", raw:find("nosuch.invalid", 1, true) == nil)
+      local raw = storedHosts()
+      check(
+        "... and the favorites store no longer lists it",
+        raw ~= "" and raw:find("nosuch.invalid", 1, true) == nil,
+        #raw .. " bytes"
+      )
       check("... its platform disappears from the map", sc:hostAt(3) == nil)
       -- paging: 9 more hosts -> 2 pages
       for i = 1, 9 do
@@ -882,7 +772,7 @@ function M.run(App, phase, H)
       key("escape")
     end)
     at(2.0, function()
-      check("Esc mid-walk -> lobby", App.sceneName == "lobby")
+      check("Esc mid-walk -> lobby", App.isLobby(App.sceneName))
       check("no session opened by the dead map scene", S.count() == sc.n0, S.count())
       -- fps with 3 sessions on the map
       openLocalhost(15, true)
@@ -956,7 +846,6 @@ function M.run(App, phase, H)
   -- display3 -----------------------------------------------------------------
   if phase == "display3" then
     local Term = require("src.scenes.terminal")
-    local Lobby = require("src.scenes.lobby")
     local rec
     local g0
     at(3.4, function()
@@ -1042,8 +931,14 @@ function M.run(App, phase, H)
       check("Ctrl+O chord", require("src.keys").appChord("o", ctrl) == "orientation")
       key("escape")
     end)
-    local function cfgFile()
-      local t = require("src.json").decode(love.filesystem.read("config.json") or "{}")
+    -- Where settings actually live: SQLite (ui.config) under the real core;
+    -- the JSON file is only the legacy import that config.lua reads once.
+    local function cfgStore()
+      local raw = App.core.kvGet("ui.config")
+      if raw == "" then
+        raw = love.filesystem.read(App.cfg.FILE) or "{}"
+      end
+      local t = require("src.json").decode(raw)
       return t and t.orientation
     end
     for _, step in ipairs({
@@ -1054,7 +949,7 @@ function M.run(App, phase, H)
       at(0.4, function()
         App.cycleOrientation()
         check("Ctrl+O -> " .. step[1], D.orientationMode == step[1], D.orientationMode)
-        check("... persisted in config.json", cfgFile() == step[1], tostring(cfgFile()))
+        check("... persisted in settings", cfgStore() == step[1], tostring(cfgStore()))
         check(
           "... effective portrait=" .. tostring(step[2]) .. " at 1080x800",
           D.portrait == step[2]
@@ -1129,6 +1024,9 @@ function M.run(App, phase, H)
     -- portrait 1080x1920
     at(0.8, function()
       setMode(1080, 1920)
+      -- the column check below is a Map 2 property, and the pan test above
+      -- left Map 1 as the remembered lobby
+      App.switch("map2")
     end)
     at(0.8, function()
       info(
@@ -1136,7 +1034,7 @@ function M.run(App, phase, H)
         D.w .. "x" .. D.h .. " scale " .. D.s .. " vw " .. D.vw .. "x" .. D.vh
       )
       check("auto portrait at 1080x1920", D.portrait == true)
-      local cols = App.scene:columns()
+      local cols = App.scene.cols
       check("lobby cards in 1-2 columns", cols >= 1 and cols <= 2, cols)
       shot("qa_display3_p1080_lobby")
       App.switch("terminal", { id = rec.id })
@@ -1154,9 +1052,14 @@ function M.run(App, phase, H)
         i and i.cols == sc.cols and i.rows == sc.rows,
         sc.cols .. "x" .. sc.rows
       )
+      -- The hint shrinks by design as the window narrows: grid + "F2 lobby
+      -- F1 help", then "F2 lobby F1 help", then "F1 help" (Term.drawStatus).
+      -- At 1080x1920 the content width is far below the 640 px the `nav` phase
+      -- checks the full hint at, so what is guaranteed here is that a hint
+      -- survives at all.
       check(
-        "1080x1920: status bar shows F2 lobby",
-        sc.statusRight:find("F2 lobby", 1, true) ~= nil,
+        "1080x1920: status bar keeps a hint",
+        sc.statusRight:find("F1 help", 1, true) ~= nil,
         sc.statusRight
       )
       shot("qa_display3_p1080_ai")
@@ -1179,7 +1082,13 @@ function M.run(App, phase, H)
     end)
     at(1.0, function()
       local sc = App.scene
-      check("1080x1920 map fits the width", sc.L.mapW == D.vw, sc.L.mapW .. " vs " .. D.vw)
+      -- Portrait covers the tall view and pans sideways (e140b9f); it no
+      -- longer fits the map to the width and letterboxes it.
+      check(
+        "1080x1920 map covers the tall view",
+        sc.L.mapH == sc.L.viewH and sc.L.mapW > D.vw,
+        sc.L.mapW .. "x" .. sc.L.mapH .. " view " .. D.vw .. "x" .. sc.L.viewH
+      )
       check("1080x1920 map fully visible (no pan needed)", sc.L.mapH <= sc.L.viewH)
       shot("qa_display3_p1080_map")
       App.switch("terminal", { id = rec.id })
@@ -1205,10 +1114,13 @@ function M.run(App, phase, H)
         sc.cols .. "x" .. sc.rows
       )
       check("resize storm: landscape again at 1080x800", D.portrait == false)
+      -- Against the grid this phase started with, not a constant captured on
+      -- one machine: the window a request of 1280x800 actually produces, and
+      -- so the grid it yields, differs per display.
       check(
-        "1080x800 grid unchanged from phase 2 (125x40)",
-        sc.cols == 125 and sc.rows == 40,
-        sc.cols .. "x" .. sc.rows
+        "1080x800 grid unchanged from the start of the phase",
+        sc.cols == g0[1] and sc.rows == g0[2],
+        sc.cols .. "x" .. sc.rows .. " vs " .. g0[1] .. "x" .. g0[2]
       )
       shot("qa_display3_final")
     end)
