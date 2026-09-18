@@ -85,8 +85,9 @@ function Map3:sendArt(kind)
   for _, line in ipairs(art) do
     quoted[#quoted + 1] = "'" .. line .. "'"
   end
-  self.command.value = "printf '%s\\n' " .. table.concat(quoted, " ")
-  self:sendCommand()
+  -- Sent as an argument, like WORD ART: the command field keeps whatever the
+  -- user typed instead of being overwritten by the printf.
+  self:sendCommand("printf '%s\\n' " .. table.concat(quoted, " "))
 end
 function Map3:sendWordArt()
   local command, err = require("src.ascii_banner").command(self.command.value)
@@ -352,6 +353,15 @@ function Map3:keypressed(key, m)
     self.app.push("help")
   elseif chord == "search" then
     self.app.push("search")
+  elseif chord == "rename" then
+    local rec = self.entries[self.sel]
+    if rec and not rec.simulated then
+      self.app.push("rename", { id = rec.id })
+    end
+  elseif chord == "quit" then
+    love.event.quit()
+  elseif chord == "lobby" then
+    return -- already a lobby, like Map 1 and Map 2
   elseif key == "delete" then
     local rec = self.entries[self.sel]
     if rec and not rec.simulated then
