@@ -12,6 +12,35 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Scripted walkthroughs, cheapest first. Adding a phase to love2d/src/shots*.lua
+# without adding it here (or to UNWIRED in tools/check_consistency.py) is a CI
+# failure: an unrun phase rots silently, which is how ten `App.sceneName ==
+# "lobby"` assertions stayed dead for sixteen commits.
+PHASES = [
+    # phase           group          --mock
+    ("display",       "display",     False),
+    ("files",         "files",       False),
+    ("folders",       "folders",     False),
+    ("limit",         "limit",       False),
+    ("commander",     "commander",   False),
+    ("map",           "map",         False),
+    ("portrait",      "portrait",    False),
+    ("mock",          "mock",        True),
+    ("polish",        "polish",      True),
+    ("monitors",      "monitors",    True),
+    ("maps",          "maps",        False),
+    ("aichat",        "aichat",      False),
+    ("assist",        "assist",      False),
+    ("kitty",         "kitty",       False),
+    ("notes",         "notes",       False),
+    ("hotnote",       "hotnote",     False),
+    # restart pairs: same group, so the second half sees the first half's state
+    ("nav",           "nav",         False),
+    ("nav2",          "nav",         False),
+    ("restorewrite",  "restore",     False),
+    ("restoreread",   "restore",     False),
+]
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -35,22 +64,29 @@ def main():
         stages.append(("ffi", [args.luajit, "rust/examples/ffi_smoke.lua"], "ffi"))
     if args.suite == "all":
         stages.append(("love-unit", [args.love, "love2d", "--", "--test"], "love-unit"))
-    # These scripts use real localhost SSH. The last pair intentionally shares
-    # one database/JSONL directory across two separate app processes.
     if args.suite in ("all", "integration"):
         # Kitty graphics through the C ABI over real localhost SSH (tools/kitty_test.py).
         stages.append(("kitty", ["python3", "tools/kitty_test.py", "--selftest",
                                  "--lib", "rust/target/release/libcbo_core.dylib"], "kitty"))
-    for phase in ("maps", "aichat", "assist", "kitty", "notes", "hotnote", "restorewrite", "restoreread"):
-        group = "restore" if phase.startswith("restore") else phase
-        stages.append((f"love-{phase}", [args.love, "love2d", f"--shots={phase}"], group))
+    # (phase, group, needs_mock). The group is both the CBO_HOME directory and
+    # CBO_QA_GROUP, which scopes the LOVE save-dir config.json (love2d/main.lua):
+    # two phases in one group share persisted settings on purpose, and two
+    # phases in different groups cannot leak into each other. A restart pair is
+    # exactly that — the second half reads what the first one stored.
+    for phase, group, mock in PHASES:
+        command = [args.love, "love2d"]
+        if mock:
+            command.append("--mock")
+        command.append(f"--shots={phase}")
+        stages.append((f"love-{phase}", command, group))
     results = []
     print(f"Test reports: {report_dir}", flush=True)
     print("Local SSH integration is required. Provider tests run with available environment keys.", flush=True)
     with tempfile.TemporaryDirectory(prefix="cbo-test-all-") as temp:
         for name, command, group in stages:
             env = os.environ.copy()
-            env.update(CBO_HOME=str(Path(temp) / group), CBO_IT="1", CBO_LIVE="1")
+            env.update(CBO_HOME=str(Path(temp) / group), CBO_IT="1", CBO_LIVE="1",
+                       CBO_QA_GROUP=group)
             log_path = report_dir / f"{name}.log"
             started = time.monotonic()
             print(f"RUN  {name}", flush=True)

@@ -6,7 +6,9 @@
 # with LuaJIT and driven through the C ABI headlessly (rust/examples/
 # ffi_smoke.lua), which is as far as a runner without a window server can go.
 # The in-engine suite (`make test-love`) and the SSH/UI integration runs need a
-# display and a local sshd, so they stay on a laptop.
+# display and a local sshd, so they stay on a laptop. What CI can still hold on
+# to for them is tools/check_consistency.py: the cross-file rules that decide
+# whether those suites are even wired up and still asserting live things.
 #
 # Packaging is exercised on every push: the portable bundle on Linux, where the
 # staged core is loaded from ./dist with no checkout beside it, and the macOS
@@ -103,6 +105,14 @@ jobs:
           args: --check love2d
 
       - run: make lint-lua LUAJIT=luajit
+
+      # Rules that span files and that a byte-compile cannot see: every shots
+      # phase is either wired into tools/run_tests.py or listed as deliberately
+      # unwired, nothing asserts a scene the lobby no longer has, Help names
+      # every lobby layout, all three lobbies answer the same chords, and the
+      # auto-name check still matches the names sessions.lua builds. Pure
+      # source reading, so it runs here where LÖVE cannot.
+      - run: make lint-consistency
 
       # The cdef is generated from the header and both are committed; a header
       # edited without `make cdef` is the contract silently drifting.

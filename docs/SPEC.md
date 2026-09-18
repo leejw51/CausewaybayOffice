@@ -237,13 +237,24 @@ on a filename starts the transfer. Active button styling, hover underline/hand
 cursor, and a filename/status hint identify the target. Blank clicks keep the
 mode active; Esc or another DOWNLOAD click cancels without sending shell input.
 
-## Lobby layouts and text containment (2026-09-09)
+## Lobby layouts and text containment (2026-09-09, Map 3 added 2026-09-11)
 
-The lobby is Map 1 (world map) or Map 2 (searchable session grid), selected by
-the shared header controls and persisted as `lobbyView`. Map 2 is the default.
-Boot, terminal return shortcuts, and disconnect all resolve to the current
-lobby. There is no third lobby destination. Map 2 wraps filter controls with
+The lobby is Map 1 (world map), Map 2 (searchable session grid) or Map 3 (live
+monitor wall), selected by the shared header controls and persisted as
+`lobbyView`. Map 2 is the default. Boot, terminal return shortcuts, and
+disconnect all resolve to the current lobby. Map 2 wraps filter controls with
 the window; Escape clears its search and filters.
+
+`scenes/lobby.lua` is not one of these layouts and has not been a reachable
+scene since the layouts were unified: `App.switch("lobby")` resolves through
+`App.lobbyView()`, which returns only `map`, `map2` or `map3`. The file
+survives as a helper module (`columnsFor`, `ledFrame`, `heroStrip`). Nothing
+may test for `App.sceneName == "lobby"`; `App.isLobby(name)` is the question
+worth asking, and tools/check_consistency.py fails the build on the old form.
+
+All three layouts answer the same application chords (new, search, settings,
+help, rename, quit, and F2/Ctrl+Esc resolving to the current lobby), so a key
+the Help page advertises works from whichever lobby the user chose.
 
 Text fields reserve cursor space and preserve the parent's clipping rectangle.
 Single-line labels truncate at Unicode boundaries with an ellipsis; Help wraps
